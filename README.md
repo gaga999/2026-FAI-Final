@@ -85,3 +85,37 @@ class BestPlayer1:
 *   **6th Card Rule**: If a row has 5 cards, the 6th card placed takes the row.
 *   **Low Card Rule**: If a played card is lower than the last card of all rows, the player takes the row with the **lowest score**.
     *   Tie-breaking: Lowest card count -> Smallest row index.
+
+## MCTS + PUCT Training Pipeline (Implemented)
+
+This repository now includes an offline training pipeline that keeps training-time and inference-time information strictly separated.
+
+### Files
+* `train_mcts_puct.py`: self-play training entrypoint.
+* `src/training/state_codec.py`: partial-observation encoder.
+* `src/training/policy_value_net.py`: policy-value network.
+* `src/training/mcts_core.py`: full-state rollout utilities + root PUCT search.
+* `src/players/b13902102/best_player1.py`: submission-ready player (fast/strong modes).
+
+### Why this architecture is safe
+* **Training phase uses full state** via `Engine` snapshots (including all hands) to run search.
+* **Inference phase only uses `action(hand, history)` inputs** (partial observation), so no hidden information is read by the submitted player.
+* Policy priors are always produced from partial observations; full state is only used for training-time transition simulation.
+
+### Train
+```bash
+python3 train_mcts_puct.py \
+    --config configs/game/train_selfplay_example.json \
+    --episodes 200 \
+    --sims 32 \
+    --output artifacts/mcts_puct_policy.pt
+```
+
+### Run a single game with trained player
+```bash
+python3 run_single_game.py --config configs/game/mcts_puct_player_example.json
+```
+
+### Player mode
+* `mode="fast"`: policy-only argmax, strongest latency robustness.
+* `mode="strong"`: lightweight root PUCT (time-budgeted) for stronger play.

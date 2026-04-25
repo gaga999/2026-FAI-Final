@@ -1,0 +1,32 @@
+{
+    "players": [
+        {
+            "path": "src.players.b13902102.best_player1",
+            "class": "BestPlayer1",
+            "args": {
+                "mode": "fast",
+                "model_path": "artifacts/mcts_puct_policy.pt"
+            },
+            "label": "mcts-puct"
+        },
+        [
+            "src.players.TA.random_player",
+            "RandomPlayer"
+        ],
+        [
+            "src.players.TA.random_player",
+            "RandomPlayer"
+        ],
+        [
+            "src.players.TA.random_player",
+            "RandomPlayer"
+        ]
+    ],
+    "engine": {
+        "n_players": 4,
+        "n_rounds": 10,
+        "verbose": false,
+        "timeout": 1.0,
+        "timeout_buffer": 0.5
+    }
+}

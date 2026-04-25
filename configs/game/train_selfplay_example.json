@@ -1,0 +1,11 @@
+{
+    "engine": {
+        "n_cards": 104,
+        "n_players": 4,
+        "n_rounds": 10,
+        "board_size_x": 5,
+        "board_size_y": 4,
+        "verbose": false,
+        "seed": 42
+    }
+}
