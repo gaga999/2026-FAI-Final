@@ -102,6 +102,7 @@ This repository now includes an offline training pipeline with engine-driven tra
 * **Inference phase only uses `action(hand, history)` inputs** (partial observation), so no hidden information is read by the submitted player.
 * **Policy priors are generated from partial observations**; opponent actions in training search/rollout are sampled from legal hands to reduce hidden-information leakage in policy inference.
 * **State encoder includes ordered recent history (`history_k`)** instead of only unordered seen-card aggregation.
+* **Training loop now follows AlphaZero-style stabilizers**: replay buffer, frozen search network, mini-batch updates, and periodic target sync.
 
 ### Train
 ```bash
@@ -110,6 +111,11 @@ python3 train_mcts_puct.py \
     --episodes 200 \
     --sims 32 \
     --history-k 4 \
+    --replay-size 50000 \
+    --min-replay 1024 \
+    --batch-size 256 \
+    --updates-per-episode 8 \
+    --target-sync-interval 20 \
     --output artifacts/mcts_puct_policy.pt
 ```
 
@@ -126,6 +132,12 @@ python3 train_mcts_puct.py \
 
 ### New/updated training CLI args
 * `--history-k` (default: `4`): number of recent rounds encoded as ordered one-hot history features.
+* `--replay-size` / `--min-replay`: replay capacity and warmup threshold before updates.
+* `--batch-size` / `--updates-per-episode`: learner optimization workload each episode.
+* `--target-sync-interval`: how often search network copies learner weights.
+* `--root-dirichlet-alpha` / `--root-dirichlet-eps`: root exploration noise for MCTS targets.
+* `--value-weight` / `--entropy-weight`: objective balancing terms.
+* `--grad-clip` / `--weight-decay`: optimization stability controls.
 * `--debug-trace`: prints per-round sampled joint actions, legal sets, and encoder dimension for debugging.
 
 ### Checkpoint compatibility note

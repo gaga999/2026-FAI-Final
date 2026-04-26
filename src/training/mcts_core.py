@@ -192,11 +192,9 @@ def rollout_with_policy(
     codec,
     rng: random.Random,
     temperature: float = 1.0,
-    root_player_idx: int = 0,
 ) -> FullGameState:
     """Rolls out from current state using policy priors for all players."""
     s = state.clone()
-    root_player = int(max(0, min(s.n_players - 1, root_player_idx)))
     while not s.is_terminal():
         actions = [0] * s.n_players
         hist = history_view(s)
@@ -206,29 +204,25 @@ def rollout_with_policy(
                 actions[p_idx] = hand[0]
                 continue
 
-            if p_idx == root_player:
-                x = codec.encode_partial(hand, hist, p_idx).unsqueeze(0)
-                with torch.no_grad():
-                    logits, _ = policy_value_net(x)
-                    logits = logits[0]
+            x = codec.encode_partial(hand, hist, p_idx).unsqueeze(0)
+            with torch.no_grad():
+                logits, _ = policy_value_net(x)
+                logits = logits[0]
 
-                legal_mask = codec.legal_action_mask(hand)
-                probs = masked_policy_distribution(logits, legal_mask, temperature=temperature)
-                choices = []
-                weights = []
-                for c in hand:
-                    choices.append(c)
-                    weights.append(float(probs[c - 1]))
+            legal_mask = codec.legal_action_mask(hand)
+            probs = masked_policy_distribution(logits, legal_mask, temperature=temperature)
+            choices = []
+            weights = []
+            for c in hand:
+                choices.append(c)
+                weights.append(float(probs[c - 1]))
 
-                sw = sum(weights)
-                if sw <= 0.0:
-                    actions[p_idx] = min(hand)
-                else:
-                    norm_weights = [w / sw for w in weights]
-                    actions[p_idx] = rng.choices(choices, weights=norm_weights, k=1)[0]
+            sw = sum(weights)
+            if sw <= 0.0:
+                actions[p_idx] = min(hand)
             else:
-                # Opponent simulation uses hand-only random policy to avoid hidden-hand network leakage.
-                actions[p_idx] = rng.choice(hand)
+                norm_weights = [w / sw for w in weights]
+                actions[p_idx] = rng.choices(choices, weights=norm_weights, k=1)[0]
 
         s = transition_with_engine(s, actions)
 
@@ -243,6 +237,8 @@ def run_root_puct(
     sims: int,
     c_puct: float,
     rng: random.Random,
+    root_dirichlet_alpha: float = 0.0,
+    root_dirichlet_eps: float = 0.0,
 ) -> Dict[int, float]:
     """Root-only PUCT for one player under full-information training state.
 
@@ -261,6 +257,16 @@ def run_root_puct(
     legal_mask = codec.legal_action_mask(hand)
     priors = masked_policy_distribution(logits, legal_mask, temperature=1.0)
 
+    prior_by_action = {a: float(priors[a - 1]) for a in hand}
+    if root_dirichlet_eps > 0.0 and root_dirichlet_alpha > 0.0 and len(hand) > 1:
+        noise = [rng.gammavariate(root_dirichlet_alpha, 1.0) for _ in hand]
+        noise_sum = sum(noise)
+        if noise_sum > 0.0:
+            noise = [x / noise_sum for x in noise]
+            eps = max(0.0, min(1.0, float(root_dirichlet_eps)))
+            for i, a in enumerate(hand):
+                prior_by_action[a] = (1.0 - eps) * prior_by_action[a] + eps * noise[i]
+
     N = {a: 0 for a in hand}
     W = {a: 0.0 for a in hand}
     Q = {a: 0.0 for a in hand}
@@ -270,7 +276,7 @@ def run_root_puct(
         best_a = hand[0]
         best_u = -1e18
         for a in hand:
-            p = float(priors[a - 1])
+            p = prior_by_action[a]
             u = Q[a] + c_puct * p * math.sqrt(total_n + 1.0) / (1.0 + N[a])
             if u > best_u:
                 best_u = u
@@ -279,6 +285,7 @@ def run_root_puct(
         # Build one simulated round action profile.
         sim_state = state.clone()
         joint = [0] * sim_state.n_players
+        round_hist = history_view(sim_state)
         for p_idx in range(sim_state.n_players):
             p_hand = sim_state.hands[p_idx]
             if p_idx == player_idx:
@@ -288,8 +295,20 @@ def run_root_puct(
                 joint[p_idx] = p_hand[0]
                 continue
 
-            # Opponent policies are sampled from legal hand only to keep partial-observation alignment.
-            joint[p_idx] = rng.choice(p_hand)
+            px = codec.encode_partial(p_hand, round_hist, p_idx).unsqueeze(0)
+            with torch.no_grad():
+                plogits, _ = policy_value_net(px)
+                plogits = plogits[0]
+
+            pmask = codec.legal_action_mask(p_hand)
+            pprobs = masked_policy_distribution(plogits, pmask, temperature=1.0)
+            candidates = p_hand
+            weights = [float(pprobs[c - 1]) for c in candidates]
+            sw = sum(weights)
+            if sw <= 0.0:
+                joint[p_idx] = min(candidates)
+            else:
+                joint[p_idx] = rng.choices(candidates, weights=weights, k=1)[0]
 
         sim_state = transition_with_engine(sim_state, joint)
         end_state = rollout_with_policy(
@@ -298,7 +317,6 @@ def run_root_puct(
             codec,
             rng=rng,
             temperature=1.0,
-            root_player_idx=player_idx,
         )
 
         # Lower score is better in this game, so value is negative self score.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-import torch
+import torch  # type: ignore[reportMissingImports]
 
 
 @dataclass
@@ -14,7 +14,7 @@ class CodecConfig:
     board_rows: int = 4
     board_capacity: int = 5
     history_k: int = 4
-    codec_version: int = 2
+    codec_version: int = 3
 
 
 class StateCodec:
@@ -33,7 +33,7 @@ class StateCodec:
 
     @property
     def input_dim(self) -> int:
-        # hand one-hot + seen one-hot + recent history one-hot + board last + board length + scores + round
+        # hand one-hot + seen one-hot + recent history one-hot + board last + board length + scores + player_id + round
         history_dim = self.cfg.history_k * self.cfg.n_players * self.cfg.n_cards
         return (
             self.cfg.n_cards
@@ -41,6 +41,7 @@ class StateCodec:
             + history_dim
             + self.cfg.board_rows
             + self.cfg.board_rows
+            + self.cfg.n_players
             + self.cfg.n_players
             + 1
         )
@@ -123,10 +124,14 @@ class StateCodec:
         for i in range(n_players):
             score_vec[i] = (scores[i] - self_score) / 20.0
 
+        player_id_vec = torch.zeros(n_players, dtype=torch.float32)
+        if 0 <= player_idx < n_players:
+            player_id_vec[player_idx] = 1.0
+
         round_idx = float(history.get("round", 0)) / max(1, self.cfg.n_rounds)
         round_vec = torch.tensor([round_idx], dtype=torch.float32)
 
         return torch.cat(
-            [hand_vec, seen_vec, recent_hist, board_last, board_len, score_vec, round_vec],
+            [hand_vec, seen_vec, recent_hist, board_last, board_len, score_vec, player_id_vec, round_vec],
             dim=0,
         )

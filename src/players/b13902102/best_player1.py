@@ -56,7 +56,7 @@ class BestPlayer1:
                     if not isinstance(codec_meta, dict):
                         raise ValueError("Checkpoint missing codec metadata; retrain with codec v2+")
                     version = int(codec_meta.get("version", -1))
-                    if version != 2:
+                    if version < 2:
                         raise ValueError(f"Unsupported codec version: {version}")
                     cfg = CodecConfig(
                         n_cards=int(payload.get("n_cards", 104)),
