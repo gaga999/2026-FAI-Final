@@ -1,5 +1,14 @@
 {
     "players": [
+        {
+            "path": "src.players.b13902102.best_player1",
+            "class": "BestPlayer1",
+            "args": {
+                "mode": "fast",
+                "model_path": "artifacts/mcts_puct_policy.pt"
+            },
+            "label": "mcts-puct"
+        },
         [
             "src.players.TA.public_baselines1",
             "Baseline1",
@@ -17,12 +26,6 @@
             "Baseline3",
             {},
             "B3"
-        ],
-        [
-            "src.players.TA.public_baselines1",
-            "Baseline4",
-            {},
-            "B4"
         ]
     ],
     "engine": {

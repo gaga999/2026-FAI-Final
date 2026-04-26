@@ -12,7 +12,8 @@ import torch
 
 from src.engine import Engine
 from src.training import StateCodec, PolicyValueNet
-from src.training.mcts_core import state_from_engine, history_view, run_root_puct, apply_joint_action
+from src.training.state_codec import CodecConfig
+from src.training.mcts_core import state_from_engine, history_view, run_root_puct
 
 
 class ScriptedPlayer:
@@ -23,8 +24,14 @@ class ScriptedPlayer:
 
     def __init__(self, player_idx: int):
         self.player_idx = player_idx
+        self.next_action: int | None = None
+
+    def set_action(self, action: int) -> None:
+        self.next_action = int(action)
 
     def action(self, hand, history):
+        if self.next_action in hand:
+            return int(self.next_action)
         return min(hand)
 
 
@@ -39,6 +46,8 @@ class TrainConfig:
     seed: int = 42
     device: str = "cpu"
     save_every: int = 50
+    history_k: int = 4
+    debug_trace: bool = False
 
 
 def _load_game_config(config_path: str) -> dict:
@@ -61,7 +70,17 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
     rng = random.Random(train_cfg.seed)
     torch.manual_seed(train_cfg.seed)
 
-    codec = StateCodec()
+    codec = StateCodec(
+        CodecConfig(
+            n_cards=int(game_cfg.get("engine", {}).get("n_cards", 104)),
+            n_players=int(game_cfg.get("engine", {}).get("n_players", 4)),
+            n_rounds=int(game_cfg.get("engine", {}).get("n_rounds", 10)),
+            board_rows=int(game_cfg.get("engine", {}).get("board_size_y", 4)),
+            board_capacity=int(game_cfg.get("engine", {}).get("board_size_x", 5)),
+            history_k=int(train_cfg.history_k),
+            codec_version=2,
+        )
+    )
     net = PolicyValueNet(input_dim=codec.input_dim, hidden_dim=train_cfg.hidden_dim)
     net.to(train_cfg.device)
 
@@ -75,11 +94,10 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
     for episode in range(1, train_cfg.n_episodes + 1):
         # New game deal from engine (we reuse dealing and game constants).
         engine = Engine(engine_cfg, players)
-        state = state_from_engine(engine)
-
         episode_samples: List[tuple[torch.Tensor, torch.Tensor, int]] = []
 
-        while not state.is_terminal():
+        while engine.round < engine.n_rounds:
+            state = state_from_engine(engine)
             round_hist = history_view(state)
             joint = [0] * state.n_players
 
@@ -112,7 +130,19 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
 
                 joint[p_idx] = _sample_from_distribution(visit_dist, rng)
 
-            apply_joint_action(state, joint)
+            if train_cfg.debug_trace and (episode <= 2):
+                legal_sets = {p: state.hands[p][:] for p in range(state.n_players)}
+                print(
+                    f"[trace][ep={episode}][round={engine.round}] "
+                    f"joint={joint} legal={legal_sets} x_dim={codec.input_dim}"
+                )
+
+            for p_idx, player in enumerate(players):
+                player.set_action(joint[p_idx])
+            engine.play_round()
+            engine.round += 1
+
+        state = state_from_engine(engine)
 
         # Convert final outcomes to value targets per player.
         # Lower game score is better, so training value target is normalized negative score.
@@ -157,6 +187,14 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
                 "input_dim": codec.input_dim,
                 "hidden_dim": train_cfg.hidden_dim,
                 "n_cards": codec.cfg.n_cards,
+                "codec": {
+                    "version": codec.cfg.codec_version,
+                    "history_k": codec.cfg.history_k,
+                    "n_players": codec.cfg.n_players,
+                    "n_rounds": codec.cfg.n_rounds,
+                    "board_rows": codec.cfg.board_rows,
+                    "board_capacity": codec.cfg.board_capacity,
+                },
                 "meta": {
                     "episode": episode,
                     "sims_per_move": train_cfg.sims_per_move,
@@ -179,6 +217,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--save-every", type=int, default=50)
+    parser.add_argument("--history-k", type=int, default=4)
+    parser.add_argument("--debug-trace", action="store_true")
     parser.add_argument(
         "--output",
         type=str,
@@ -201,6 +241,8 @@ def main() -> None:
         seed=args.seed,
         device=args.device,
         save_every=args.save_every,
+        history_k=args.history_k,
+        debug_trace=bool(args.debug_trace),
     )
 
     run_training(game_cfg, cfg, args.output)

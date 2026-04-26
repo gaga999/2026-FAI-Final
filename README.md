@@ -11,13 +11,13 @@ The framework provides two main scripts for evaluating players, both driven by J
 ### 1. Single Game Simulation
 Use `run_single_game.py` to run a single match. It supports detailed logging and captures initial hands and history outputs.
 ```bash
-python run_single_game.py --config configs/game/example.json
+python3 run_single_game.py --config configs/game/example.json
 ```
 
 ### 2. Tournaments
 Use `run_tournament.py` to run large-scale evaluations.
 ```bash
-python run_tournament.py --config configs/tournament/example.json
+python3 run_tournament.py --config configs/tournament/example.json
 ```
 *Optional config overrides*: You can mix-and-match configurations via the command line using `--player-cfg`, `--engine-cfg`, or `--tournament-cfg`.
 
@@ -88,19 +88,20 @@ class BestPlayer1:
 
 ## MCTS + PUCT Training Pipeline (Implemented)
 
-This repository now includes an offline training pipeline that keeps training-time and inference-time information strictly separated.
+This repository now includes an offline training pipeline with engine-driven transitions and partial-observation-aligned policy inference.
 
 ### Files
 * `train_mcts_puct.py`: self-play training entrypoint.
-* `src/training/state_codec.py`: partial-observation encoder.
+* `src/training/state_codec.py`: partial-observation encoder with recent-history window features.
 * `src/training/policy_value_net.py`: policy-value network.
-* `src/training/mcts_core.py`: full-state rollout utilities + root PUCT search.
+* `src/training/mcts_core.py`: root PUCT search and rollout utilities (engine-backed transition simulation).
 * `src/players/b13902102/best_player1.py`: submission-ready player (fast/strong modes).
 
 ### Why this architecture is safe
-* **Training phase uses full state** via `Engine` snapshots (including all hands) to run search.
+* **Training phase now advances rounds through `Engine.play_round()`**, so rule execution is consistent with inference/tournament runtime.
 * **Inference phase only uses `action(hand, history)` inputs** (partial observation), so no hidden information is read by the submitted player.
-* Policy priors are always produced from partial observations; full state is only used for training-time transition simulation.
+* **Policy priors are generated from partial observations**; opponent actions in training search/rollout are sampled from legal hands to reduce hidden-information leakage in policy inference.
+* **State encoder includes ordered recent history (`history_k`)** instead of only unordered seen-card aggregation.
 
 ### Train
 ```bash
@@ -108,8 +109,28 @@ python3 train_mcts_puct.py \
     --config configs/game/train_selfplay_example.json \
     --episodes 200 \
     --sims 32 \
+    --history-k 4 \
     --output artifacts/mcts_puct_policy.pt
 ```
+
+Optional debug tracing (first 2 episodes):
+```bash
+python3 train_mcts_puct.py \
+    --config configs/game/train_selfplay_example.json \
+    --episodes 10 \
+    --sims 8 \
+    --history-k 4 \
+    --debug-trace \
+    --output artifacts/mcts_puct_policy.pt
+```
+
+### New/updated training CLI args
+* `--history-k` (default: `4`): number of recent rounds encoded as ordered one-hot history features.
+* `--debug-trace`: prints per-round sampled joint actions, legal sets, and encoder dimension for debugging.
+
+### Checkpoint compatibility note
+New checkpoints include codec metadata (version/history settings). Player loading expects this metadata (`codec.version = 2`).
+Older raw `state_dict` checkpoints are treated as legacy and should be retrained or explicitly migrated.
 
 ### Run a single game with trained player
 ```bash

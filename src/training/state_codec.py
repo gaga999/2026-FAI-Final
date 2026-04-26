@@ -13,6 +13,8 @@ class CodecConfig:
     n_rounds: int = 10
     board_rows: int = 4
     board_capacity: int = 5
+    history_k: int = 4
+    codec_version: int = 2
 
 
 class StateCodec:
@@ -31,10 +33,12 @@ class StateCodec:
 
     @property
     def input_dim(self) -> int:
-        # hand one-hot + seen one-hot + board last + board length + scores + round
+        # hand one-hot + seen one-hot + recent history one-hot + board last + board length + scores + round
+        history_dim = self.cfg.history_k * self.cfg.n_players * self.cfg.n_cards
         return (
             self.cfg.n_cards
             + self.cfg.n_cards
+            + history_dim
             + self.cfg.board_rows
             + self.cfg.board_rows
             + self.cfg.n_players
@@ -90,6 +94,25 @@ class StateCodec:
                 if isinstance(c, int) and 1 <= c <= n_cards:
                     seen_vec[c - 1] = 1.0
 
+        # Ordered history window for recent K rounds.
+        # Layout per slot: [round_0_player_0..3, round_1_player_0..3, ...], each as one-hot card.
+        history_k = max(0, int(self.cfg.history_k))
+        recent_hist = torch.zeros(history_k * n_players * n_cards, dtype=torch.float32)
+        if history_k > 0 and isinstance(history_matrix, list):
+            tail = history_matrix[-history_k:]
+            if len(tail) < history_k:
+                pad = [[0] * n_players for _ in range(history_k - len(tail))]
+                tail = pad + tail
+
+            for k_idx, row in enumerate(tail):
+                if not isinstance(row, list):
+                    continue
+                for p_idx in range(min(n_players, len(row))):
+                    c = row[p_idx]
+                    if isinstance(c, int) and 1 <= c <= n_cards:
+                        base = (k_idx * n_players + p_idx) * n_cards
+                        recent_hist[base + (c - 1)] = 1.0
+
         scores_raw = history.get("scores", [0] * n_players)
         scores = [0.0] * n_players
         for i in range(min(n_players, len(scores_raw))):
@@ -103,4 +126,7 @@ class StateCodec:
         round_idx = float(history.get("round", 0)) / max(1, self.cfg.n_rounds)
         round_vec = torch.tensor([round_idx], dtype=torch.float32)
 
-        return torch.cat([hand_vec, seen_vec, board_last, board_len, score_vec, round_vec], dim=0)
+        return torch.cat(
+            [hand_vec, seen_vec, recent_hist, board_last, board_len, score_vec, round_vec],
+            dim=0,
+        )

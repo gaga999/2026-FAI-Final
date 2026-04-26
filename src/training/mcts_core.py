@@ -8,6 +8,7 @@ from typing import Dict, List
 
 import torch
 
+from src.engine import Engine
 from .policy_value_net import masked_policy_distribution
 
 
@@ -47,6 +48,19 @@ class FullGameState:
         return self.round_idx >= self.n_rounds
 
 
+class _PlannedActionPlayer:
+    def __init__(self):
+        self.next_action = None
+
+    def set_action(self, card: int) -> None:
+        self.next_action = int(card)
+
+    def action(self, hand, history):
+        if self.next_action in hand:
+            return int(self.next_action)
+        return min(hand)
+
+
 def state_from_engine(engine) -> FullGameState:
     return FullGameState(
         n_players=engine.n_players,
@@ -60,6 +74,50 @@ def state_from_engine(engine) -> FullGameState:
         board_history=[[r.copy() for r in board] for board in engine.board_history],
         score_history=[s.copy() for s in engine.score_history],
     )
+
+
+def _engine_from_state(state: FullGameState) -> tuple[Engine, List[_PlannedActionPlayer]]:
+    players = [_PlannedActionPlayer() for _ in range(state.n_players)]
+    max_seen = 104
+    for row in state.board:
+        for c in row:
+            if isinstance(c, int):
+                max_seen = max(max_seen, c)
+    for hand in state.hands:
+        for c in hand:
+            if isinstance(c, int):
+                max_seen = max(max_seen, c)
+    cfg = {
+        "n_cards": max_seen,
+        "n_players": state.n_players,
+        "n_rounds": state.n_rounds,
+        "board_size_x": state.board_size_x,
+        "board_size_y": len(state.board),
+        "verbose": False,
+        "seed": None,
+    }
+    engine = Engine(cfg, players)
+    engine.round = int(state.round_idx)
+    engine.scores = list(state.scores)
+    engine.board = [row.copy() for row in state.board]
+    engine.hands = [h.copy() for h in state.hands]
+    engine.history_matrix = [r.copy() for r in state.history_matrix]
+    engine.board_history = [[r.copy() for r in b] for b in state.board_history]
+    engine.score_history = [s.copy() for s in state.score_history]
+    return engine, players
+
+
+def transition_with_engine(state: FullGameState, joint_actions: List[int]) -> FullGameState:
+    if len(joint_actions) != state.n_players:
+        raise ValueError("joint_actions length mismatch")
+
+    engine, players = _engine_from_state(state)
+    for p_idx, card in enumerate(joint_actions):
+        players[p_idx].set_action(card)
+
+    engine.play_round()
+    engine.round += 1
+    return state_from_engine(engine)
 
 
 def history_view(state: FullGameState) -> Dict:
@@ -134,9 +192,11 @@ def rollout_with_policy(
     codec,
     rng: random.Random,
     temperature: float = 1.0,
+    root_player_idx: int = 0,
 ) -> FullGameState:
     """Rolls out from current state using policy priors for all players."""
     s = state.clone()
+    root_player = int(max(0, min(s.n_players - 1, root_player_idx)))
     while not s.is_terminal():
         actions = [0] * s.n_players
         hist = history_view(s)
@@ -146,28 +206,31 @@ def rollout_with_policy(
                 actions[p_idx] = hand[0]
                 continue
 
-            x = codec.encode_partial(hand, hist, p_idx).unsqueeze(0)
-            with torch.no_grad():
-                logits, _ = policy_value_net(x)
-                logits = logits[0]
+            if p_idx == root_player:
+                x = codec.encode_partial(hand, hist, p_idx).unsqueeze(0)
+                with torch.no_grad():
+                    logits, _ = policy_value_net(x)
+                    logits = logits[0]
 
-            legal_mask = codec.legal_action_mask(hand)
-            probs = masked_policy_distribution(logits, legal_mask, temperature=temperature)
-            # Sample with python RNG for deterministic local control.
-            choices = []
-            weights = []
-            for c in hand:
-                choices.append(c)
-                weights.append(float(probs[c - 1]))
+                legal_mask = codec.legal_action_mask(hand)
+                probs = masked_policy_distribution(logits, legal_mask, temperature=temperature)
+                choices = []
+                weights = []
+                for c in hand:
+                    choices.append(c)
+                    weights.append(float(probs[c - 1]))
 
-            sw = sum(weights)
-            if sw <= 0.0:
-                actions[p_idx] = min(hand)
+                sw = sum(weights)
+                if sw <= 0.0:
+                    actions[p_idx] = min(hand)
+                else:
+                    norm_weights = [w / sw for w in weights]
+                    actions[p_idx] = rng.choices(choices, weights=norm_weights, k=1)[0]
             else:
-                norm_weights = [w / sw for w in weights]
-                actions[p_idx] = rng.choices(choices, weights=norm_weights, k=1)[0]
+                # Opponent simulation uses hand-only random policy to avoid hidden-hand network leakage.
+                actions[p_idx] = rng.choice(hand)
 
-        apply_joint_action(s, actions)
+        s = transition_with_engine(s, actions)
 
     return s
 
@@ -216,7 +279,6 @@ def run_root_puct(
         # Build one simulated round action profile.
         sim_state = state.clone()
         joint = [0] * sim_state.n_players
-        round_hist = history_view(sim_state)
         for p_idx in range(sim_state.n_players):
             p_hand = sim_state.hands[p_idx]
             if p_idx == player_idx:
@@ -226,24 +288,18 @@ def run_root_puct(
                 joint[p_idx] = p_hand[0]
                 continue
 
-            px = codec.encode_partial(p_hand, round_hist, p_idx).unsqueeze(0)
-            with torch.no_grad():
-                plogits, _ = policy_value_net(px)
-                plogits = plogits[0]
+            # Opponent policies are sampled from legal hand only to keep partial-observation alignment.
+            joint[p_idx] = rng.choice(p_hand)
 
-            pmask = codec.legal_action_mask(p_hand)
-            pprobs = masked_policy_distribution(plogits, pmask, temperature=1.0)
-
-            candidates = p_hand
-            weights = [float(pprobs[c - 1]) for c in candidates]
-            sw = sum(weights)
-            if sw <= 0.0:
-                joint[p_idx] = min(candidates)
-            else:
-                joint[p_idx] = rng.choices(candidates, weights=weights, k=1)[0]
-
-        apply_joint_action(sim_state, joint)
-        end_state = rollout_with_policy(sim_state, policy_value_net, codec, rng=rng, temperature=1.0)
+        sim_state = transition_with_engine(sim_state, joint)
+        end_state = rollout_with_policy(
+            sim_state,
+            policy_value_net,
+            codec,
+            rng=rng,
+            temperature=1.0,
+            root_player_idx=player_idx,
+        )
 
         # Lower score is better in this game, so value is negative self score.
         value = -float(end_state.scores[player_idx])

@@ -41,20 +41,42 @@ class BestPlayer1:
                 PolicyValueNet,
                 masked_policy_distribution,
             )
-            from src.training.state_codec import StateCodec
+            from src.training.state_codec import CodecConfig, StateCodec
 
             self._torch = _torch
             self._masked_policy_distribution = masked_policy_distribution
-            self.codec = StateCodec()
-            self.net = PolicyValueNet(input_dim=self.codec.input_dim, hidden_dim=256)
-            self.net.eval()
+            cfg = CodecConfig()
+            hidden_dim = 256
+            state_dict = None
 
             if model_path:
                 payload = _torch.load(model_path, map_location="cpu")
                 if isinstance(payload, dict) and "model_state" in payload:
-                    self.net.load_state_dict(payload["model_state"], strict=False)
+                    codec_meta = payload.get("codec")
+                    if not isinstance(codec_meta, dict):
+                        raise ValueError("Checkpoint missing codec metadata; retrain with codec v2+")
+                    version = int(codec_meta.get("version", -1))
+                    if version != 2:
+                        raise ValueError(f"Unsupported codec version: {version}")
+                    cfg = CodecConfig(
+                        n_cards=int(payload.get("n_cards", 104)),
+                        n_players=int(codec_meta.get("n_players", 4)),
+                        n_rounds=int(codec_meta.get("n_rounds", 10)),
+                        board_rows=int(codec_meta.get("board_rows", 4)),
+                        board_capacity=int(codec_meta.get("board_capacity", 5)),
+                        history_k=int(codec_meta.get("history_k", 4)),
+                        codec_version=version,
+                    )
+                    hidden_dim = int(payload.get("hidden_dim", 256))
+                    state_dict = payload["model_state"]
                 elif isinstance(payload, dict):
-                    self.net.load_state_dict(payload, strict=False)
+                    raise ValueError("Raw state_dict checkpoint is not supported; expected training payload with codec metadata")
+
+            self.codec = StateCodec(cfg)
+            self.net = PolicyValueNet(input_dim=self.codec.input_dim, hidden_dim=hidden_dim, n_cards=cfg.n_cards)
+            self.net.eval()
+            if state_dict is not None:
+                self.net.load_state_dict(state_dict, strict=True)
         except Exception:
             # Keep fully-functional fallback without torch.
             self.codec = None

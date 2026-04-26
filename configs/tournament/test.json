@@ -32,12 +32,15 @@
         ]
     ],
     "players": [
-        [
-            "src.players.TA.random_player",
-            "RandomPlayer",
-            {},
-            "YourAgentPlaceholder"
-        ]
+        {
+            "path": "src.players.b13902102.best_player1",
+            "class": "BestPlayer1",
+            "args": {
+                "mode": "fast",
+                "model_path": "artifacts/mcts_puct_policy.pt"
+            },
+            "label": "mcts-puct"
+        }
     ],
     "engine": {
         "n_players": 4,
