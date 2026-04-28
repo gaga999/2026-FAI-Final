@@ -9,12 +9,16 @@ import random
 from dataclasses import dataclass
 from typing import List
 
-import torch
+import torch  # type: ignore[reportMissingImports]
 
 from src.engine import Engine
 from src.training import StateCodec, PolicyValueNet
 from src.training.state_codec import CodecConfig
-from src.training.mcts_core import state_from_engine, history_view, run_root_puct
+from src.training.mcts_core import (
+    state_from_engine,
+    history_view,
+    run_determinized_root_puct,
+)
 
 
 class ScriptedPlayer:
@@ -39,33 +43,110 @@ class ScriptedPlayer:
 @dataclass
 class TrainConfig:
     n_episodes: int = 200
-    lr: float = 1e-3
+    lr: float = 7e-4
     hidden_dim: int = 256
-    sims_per_move: int = 32
+    sims_per_move: int = 16
     c_puct: float = 1.5
     policy_temperature: float = 1.0
     seed: int = 42
     device: str = "cpu"
     save_every: int = 50
     history_k: int = 4
-    replay_size: int = 50000
-    min_replay: int = 1024
-    batch_size: int = 256
-    updates_per_episode: int = 8
+    replay_size: int = 4096
+    min_replay: int = 4096
+    batch_size: int = 128
+    updates_per_episode: int = 1
     value_weight: float = 1.0
     entropy_weight: float = 1e-3
     grad_clip: float = 1.0
     weight_decay: float = 1e-4
-    target_sync_interval: int = 20
-    root_dirichlet_alpha: float = 0.3
-    root_dirichlet_eps: float = 0.25
+    target_sync_interval: int = 5
+    root_dirichlet_alpha: float = 0.15
+    root_dirichlet_eps: float = 0.10
+    determinization_samples: int = 1
+    deal_seed_mode: str = "episode"
     debug_trace: bool = False
+    immediate_value_weight: float = 0.30
 
 
 def _load_game_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data
+
+
+def _build_train_cfg(game_cfg: dict, args: argparse.Namespace) -> TrainConfig:
+    """Build training config with precedence: CLI explicit value > config.train > defaults."""
+    cfg = TrainConfig()
+    train_section = game_cfg.get("train", {})
+    if not isinstance(train_section, dict):
+        train_section = {}
+
+    field_types = {
+        "n_episodes": int,
+        "lr": float,
+        "hidden_dim": int,
+        "sims_per_move": int,
+        "c_puct": float,
+        "seed": int,
+        "device": str,
+        "save_every": int,
+        "history_k": int,
+        "replay_size": int,
+        "min_replay": int,
+        "batch_size": int,
+        "updates_per_episode": int,
+        "value_weight": float,
+        "entropy_weight": float,
+        "grad_clip": float,
+        "weight_decay": float,
+        "target_sync_interval": int,
+        "root_dirichlet_alpha": float,
+        "root_dirichlet_eps": float,
+        "determinization_samples": int,
+        "deal_seed_mode": str,
+        "debug_trace": bool,
+        "immediate_value_weight": float,
+    }
+
+    for key, caster in field_types.items():
+        if key in train_section:
+            setattr(cfg, key, caster(train_section[key]))
+
+    cli_map = {
+        "episodes": "n_episodes",
+        "lr": "lr",
+        "hidden_dim": "hidden_dim",
+        "sims": "sims_per_move",
+        "c_puct": "c_puct",
+        "seed": "seed",
+        "device": "device",
+        "save_every": "save_every",
+        "history_k": "history_k",
+        "replay_size": "replay_size",
+        "min_replay": "min_replay",
+        "batch_size": "batch_size",
+        "updates_per_episode": "updates_per_episode",
+        "value_weight": "value_weight",
+        "entropy_weight": "entropy_weight",
+        "grad_clip": "grad_clip",
+        "weight_decay": "weight_decay",
+        "target_sync_interval": "target_sync_interval",
+        "root_dirichlet_alpha": "root_dirichlet_alpha",
+        "root_dirichlet_eps": "root_dirichlet_eps",
+        "determinization_samples": "determinization_samples",
+        "deal_seed_mode": "deal_seed_mode",
+        "immediate_value_weight": "immediate_value_weight",
+    }
+    for arg_name, field_name in cli_map.items():
+        val = getattr(args, arg_name)
+        if val is not None:
+            setattr(cfg, field_name, val)
+
+    if bool(args.debug_trace):
+        cfg.debug_trace = True
+
+    return cfg
 
 
 def _sample_from_distribution(dist: dict[int, float], rng: random.Random) -> int:
@@ -116,6 +197,11 @@ def _blended_value_targets(scores: List[float]) -> List[float]:
     return out
 
 
+def _immediate_value_target(immediate_reward: float) -> float:
+    # Squash immediate reward to [-1, 1] to keep value regression stable.
+    return float(max(-1.0, min(1.0, immediate_reward / 6.0)))
+
+
 def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> None:
     rng = random.Random(train_cfg.seed)
     torch.manual_seed(train_cfg.seed)
@@ -142,22 +228,35 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
 
     optimizer = torch.optim.Adam(net.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay)
 
-    replay = deque(maxlen=max(1024, int(train_cfg.replay_size)))
+    recent_buffer = deque(maxlen=max(1024, int(train_cfg.replay_size)))
 
     engine_cfg = copy.deepcopy(game_cfg.get("engine", {}))
     n_players = int(engine_cfg.get("n_players", 4))
+    base_engine_seed = engine_cfg.get("seed", None)
 
     players = [ScriptedPlayer(player_idx=i) for i in range(n_players)]
 
     for episode in range(1, train_cfg.n_episodes + 1):
         # New game deal from engine (we reuse dealing and game constants).
-        engine = Engine(engine_cfg, players)
-        episode_samples: List[tuple[torch.Tensor, torch.Tensor, int]] = []
+        episode_engine_cfg = copy.deepcopy(engine_cfg)
+        if train_cfg.deal_seed_mode == "episode":
+            if base_engine_seed is None:
+                episode_engine_cfg["seed"] = rng.randrange(1, 2**31 - 1)
+            else:
+                episode_engine_cfg["seed"] = int(base_engine_seed) + (episode - 1)
+        elif train_cfg.deal_seed_mode == "random":
+            episode_engine_cfg["seed"] = None
+        else:
+            episode_engine_cfg["seed"] = base_engine_seed
+
+        engine = Engine(episode_engine_cfg, players)
+        episode_samples: List[dict] = []
 
         while engine.round < engine.n_rounds:
             state = state_from_engine(engine)
             round_hist = history_view(state)
             joint = [0] * state.n_players
+            round_sample_idx = [-1] * state.n_players
 
             for p_idx in range(state.n_players):
                 hand = state.hands[p_idx]
@@ -167,17 +266,29 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
                     x = codec.encode_partial(hand, round_hist, p_idx)
                     target = torch.zeros(codec.cfg.n_cards, dtype=torch.float32)
                     target[hand[0] - 1] = 1.0
-                    episode_samples.append((x, target, p_idx))
+                    mask = codec.legal_action_mask(hand)
+                    episode_samples.append(
+                        {
+                            "x": x,
+                            "target": target,
+                            "p_idx": p_idx,
+                            "mask": mask,
+                            "score_before": float(state.scores[p_idx]),
+                            "immediate_reward": 0.0,
+                        }
+                    )
+                    round_sample_idx[p_idx] = len(episode_samples) - 1
                     continue
 
-                visit_dist = run_root_puct(
+                visit_dist = run_determinized_root_puct(
                     state=state,
                     player_idx=p_idx,
                     policy_value_net=search_net,
                     codec=codec,
-                    sims=train_cfg.sims_per_move,
+                    total_sims=train_cfg.sims_per_move,
                     c_puct=train_cfg.c_puct,
                     rng=rng,
+                    determinization_samples=train_cfg.determinization_samples,
                     root_dirichlet_alpha=train_cfg.root_dirichlet_alpha,
                     root_dirichlet_eps=train_cfg.root_dirichlet_eps,
                 )
@@ -186,7 +297,18 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
                 target = torch.zeros(codec.cfg.n_cards, dtype=torch.float32)
                 for card, prob in visit_dist.items():
                     target[card - 1] = float(prob)
-                episode_samples.append((x, target, p_idx))
+                mask = codec.legal_action_mask(hand)
+                episode_samples.append(
+                    {
+                        "x": x,
+                        "target": target,
+                        "p_idx": p_idx,
+                        "mask": mask,
+                        "score_before": float(state.scores[p_idx]),
+                        "immediate_reward": 0.0,
+                    }
+                )
+                round_sample_idx[p_idx] = len(episode_samples) - 1
 
                 joint[p_idx] = _sample_from_distribution(visit_dist, rng)
 
@@ -202,33 +324,56 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
             engine.play_round()
             engine.round += 1
 
+            for p_idx in range(n_players):
+                idx = round_sample_idx[p_idx]
+                if idx < 0:
+                    continue
+                before = float(episode_samples[idx]["score_before"])
+                after = float(engine.scores[p_idx])
+                # Lower score is better, so taking cards creates negative immediate reward.
+                episode_samples[idx]["immediate_reward"] = -(after - before)
+
         state = state_from_engine(engine)
 
         final_values = _blended_value_targets([float(s) for s in state.scores])
-        for x, target_pi, p_idx in episode_samples:
-            replay.append((x.cpu(), target_pi.cpu(), float(final_values[p_idx])))
+        ivw = max(0.0, min(1.0, float(train_cfg.immediate_value_weight)))
+        for sample in episode_samples:
+            p_idx = int(sample["p_idx"])
+            immediate_v = _immediate_value_target(float(sample["immediate_reward"]))
+            target_v = (1.0 - ivw) * float(final_values[p_idx]) + ivw * immediate_v
+            recent_buffer.append(
+                (
+                    sample["x"].cpu(),
+                    sample["target"].cpu(),
+                    float(target_v),
+                    sample["mask"].cpu(),
+                )
+            )
 
         loss = torch.tensor(0.0)
         loss_policy = torch.tensor(0.0)
         loss_value = torch.tensor(0.0)
         loss_entropy = torch.tensor(0.0)
 
-        if len(replay) >= max(1, train_cfg.min_replay):
+        if len(recent_buffer) >= max(1, train_cfg.min_replay):
             net.train()
             acc_policy = 0.0
             acc_value = 0.0
             acc_entropy = 0.0
             n_updates = max(1, int(train_cfg.updates_per_episode))
+            buffer_snapshot = list(recent_buffer)
 
             for _ in range(n_updates):
-                batch = rng.sample(list(replay), k=min(int(train_cfg.batch_size), len(replay)))
+                batch = rng.sample(buffer_snapshot, k=min(int(train_cfg.batch_size), len(buffer_snapshot)))
                 xb = torch.stack([b[0] for b in batch], dim=0).to(train_cfg.device)
                 pib = torch.stack([b[1] for b in batch], dim=0).to(train_cfg.device)
                 vb = torch.tensor([b[2] for b in batch], dtype=torch.float32, device=train_cfg.device)
+                legal_mask = torch.stack([b[3] for b in batch], dim=0).to(train_cfg.device)
 
                 policy_logits, value = net(xb)
-                log_probs = torch.log_softmax(policy_logits, dim=-1)
-                probs = torch.softmax(policy_logits, dim=-1)
+                masked_logits = policy_logits.masked_fill(legal_mask <= 0.0, -1e9)
+                log_probs = torch.log_softmax(masked_logits, dim=-1)
+                probs = torch.softmax(masked_logits, dim=-1)
 
                 p_loss = -torch.mean(torch.sum(pib * log_probs, dim=-1))
                 v_loss = torch.mean((value - vb) ** 2)
@@ -261,7 +406,7 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
                 f"policy={float(loss_policy.item()):.4f} "
                 f"value={float(loss_value.item()):.4f} "
                 f"entropy={float(loss_entropy.item()):.4f} "
-                f"replay={len(replay)} "
+                f"buffer={len(recent_buffer)} "
                 f"final_scores={state.scores}"
             )
 
@@ -286,6 +431,9 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
                     "replay_size": train_cfg.replay_size,
                     "batch_size": train_cfg.batch_size,
                     "updates_per_episode": train_cfg.updates_per_episode,
+                    "determinization_samples": train_cfg.determinization_samples,
+                    "deal_seed_mode": train_cfg.deal_seed_mode,
+                    "immediate_value_weight": train_cfg.immediate_value_weight,
                 },
             }
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -296,31 +444,39 @@ def run_training(game_cfg: dict, train_cfg: TrainConfig, output_path: str) -> No
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline MCTS+PUCT self-play training")
     parser.add_argument("--config", required=True, help="Path to game config JSON")
-    parser.add_argument("--episodes", type=int, default=200)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--hidden-dim", type=int, default=256)
-    parser.add_argument("--sims", type=int, default=32)
-    parser.add_argument("--c-puct", type=float, default=1.5)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--save-every", type=int, default=50)
-    parser.add_argument("--history-k", type=int, default=4)
-    parser.add_argument("--replay-size", type=int, default=50000)
-    parser.add_argument("--min-replay", type=int, default=1024)
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--updates-per-episode", type=int, default=8)
-    parser.add_argument("--value-weight", type=float, default=1.0)
-    parser.add_argument("--entropy-weight", type=float, default=1e-3)
-    parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--target-sync-interval", type=int, default=20)
-    parser.add_argument("--root-dirichlet-alpha", type=float, default=0.3)
-    parser.add_argument("--root-dirichlet-eps", type=float, default=0.25)
+    parser.add_argument("--episodes", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--hidden-dim", type=int, default=None)
+    parser.add_argument("--sims", type=int, default=None)
+    parser.add_argument("--c-puct", type=float, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--save-every", type=int, default=None)
+    parser.add_argument("--history-k", type=int, default=None)
+    parser.add_argument("--replay-size", type=int, default=None)
+    parser.add_argument("--min-replay", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--updates-per-episode", type=int, default=None)
+    parser.add_argument("--value-weight", type=float, default=None)
+    parser.add_argument("--entropy-weight", type=float, default=None)
+    parser.add_argument("--grad-clip", type=float, default=None)
+    parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--target-sync-interval", type=int, default=None)
+    parser.add_argument("--root-dirichlet-alpha", type=float, default=None)
+    parser.add_argument("--root-dirichlet-eps", type=float, default=None)
+    parser.add_argument("--determinization-samples", type=int, default=None)
+    parser.add_argument(
+        "--deal-seed-mode",
+        type=str,
+        default=None,
+        choices=["episode", "fixed", "random"],
+    )
     parser.add_argument("--debug-trace", action="store_true")
+    parser.add_argument("--immediate-value-weight", type=float, default=None)
     parser.add_argument(
         "--output",
         type=str,
-        default="artifacts/mcts_puct_policy.pt",
+        default=None,
         help="Output checkpoint path",
     )
     return parser.parse_args()
@@ -329,32 +485,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     game_cfg = _load_game_config(args.config)
+    cfg = _build_train_cfg(game_cfg, args)
 
-    cfg = TrainConfig(
-        n_episodes=args.episodes,
-        lr=args.lr,
-        hidden_dim=args.hidden_dim,
-        sims_per_move=args.sims,
-        c_puct=args.c_puct,
-        seed=args.seed,
-        device=args.device,
-        save_every=args.save_every,
-        history_k=args.history_k,
-        replay_size=args.replay_size,
-        min_replay=args.min_replay,
-        batch_size=args.batch_size,
-        updates_per_episode=args.updates_per_episode,
-        value_weight=args.value_weight,
-        entropy_weight=args.entropy_weight,
-        grad_clip=args.grad_clip,
-        weight_decay=args.weight_decay,
-        target_sync_interval=args.target_sync_interval,
-        root_dirichlet_alpha=args.root_dirichlet_alpha,
-        root_dirichlet_eps=args.root_dirichlet_eps,
-        debug_trace=bool(args.debug_trace),
-    )
+    config_output = game_cfg.get("train", {}).get("output") if isinstance(game_cfg.get("train", {}), dict) else None
+    output_path = args.output or config_output or "artifacts/mcts_puct_policy.pt"
 
-    run_training(game_cfg, cfg, args.output)
+    run_training(game_cfg, cfg, output_path)
 
 
 if __name__ == "__main__":

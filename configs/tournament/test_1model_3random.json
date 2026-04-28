@@ -22,10 +22,10 @@
             "random-2"
         ],
         [
-            "src.players.TA.random_player",
-            "RandomPlayer",
+            "src.players.b13902102.best_player2",
+            "BestPlayer2",
             {},
-            "random-3"
+            "mcts-heuristic"
         ]
     ],
     "engine": {

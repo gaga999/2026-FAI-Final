@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import random
+import time
 from dataclasses import dataclass
 from typing import Dict, List
 
@@ -59,6 +60,66 @@ class _PlannedActionPlayer:
         if self.next_action in hand:
             return int(self.next_action)
         return min(hand)
+
+
+def infer_n_cards(state: FullGameState) -> int:
+    n_cards = 104
+    for row in state.board:
+        for c in row:
+            if isinstance(c, int):
+                n_cards = max(n_cards, c)
+    for hand in state.hands:
+        for c in hand:
+            if isinstance(c, int):
+                n_cards = max(n_cards, c)
+    for row in state.history_matrix:
+        for c in row:
+            if isinstance(c, int):
+                n_cards = max(n_cards, c)
+    return n_cards
+
+
+def determinize_state_for_player(
+    state: FullGameState,
+    player_idx: int,
+    rng: random.Random,
+) -> FullGameState:
+    """Builds a determinized hidden-information state from one player's view.
+
+    We keep root player's hand fixed, and sample opponent hands from unknown cards
+    consistent with board + played history + own hand.
+    """
+    s = state.clone()
+    n_cards = infer_n_cards(s)
+
+    known = set(s.hands[player_idx])
+    for row in s.board:
+        for c in row:
+            if isinstance(c, int):
+                known.add(c)
+    for row in s.history_matrix:
+        for c in row:
+            if isinstance(c, int):
+                known.add(c)
+
+    unknown = [c for c in range(1, n_cards + 1) if c not in known]
+    rng.shuffle(unknown)
+
+    ptr = 0
+    for p in range(s.n_players):
+        if p == player_idx:
+            continue
+        k = len(s.hands[p])
+        if ptr + k <= len(unknown):
+            s.hands[p] = sorted(unknown[ptr : ptr + k])
+            ptr += k
+        else:
+            # Fallback in pathological cases: sample with replacement from unknown
+            if len(unknown) == 0:
+                s.hands[p] = [min(s.hands[player_idx])] * k
+            else:
+                s.hands[p] = sorted(rng.choice(unknown) for _ in range(k))
+    return s
 
 
 def state_from_engine(engine) -> FullGameState:
@@ -229,6 +290,87 @@ def rollout_with_policy(
     return s
 
 
+def bootstrap_value_after_joint_action(
+    state: FullGameState,
+    player_idx: int,
+    joint_actions: List[int],
+    policy_value_net,
+    codec,
+) -> float:
+    """Fast one-step estimate of the acting player's return after a joint action.
+
+    This is much cheaper than rolling the whole game to the end inside every sim.
+    """
+    next_state = transition_with_engine(state, joint_actions)
+    if next_state.is_terminal():
+        return -float(next_state.scores[player_idx])
+
+    hist = history_view(next_state)
+    hand = next_state.hands[player_idx]
+    if not hand:
+        return -float(next_state.scores[player_idx])
+
+    x = codec.encode_partial(hand, hist, player_idx).unsqueeze(0)
+    with torch.no_grad():
+        _, value = policy_value_net(x)
+    # Lower score is better, so higher network value means better position.
+    return -float(next_state.scores[player_idx]) - float(value.item())
+
+
+def _player_utility_after_joint_action(
+    state: FullGameState,
+    next_state: FullGameState,
+    player_idx: int,
+    policy_value_net,
+    codec,
+    immediate_weight: float,
+) -> float:
+    """Player utility after one simultaneous action with immediate-reaction shaping.
+
+    Utility is based on next cumulative score, an immediate penalty signal from this
+    transition, and value bootstrap from the next partial observation.
+    """
+    immediate_penalty = float(next_state.scores[player_idx] - state.scores[player_idx])
+    util = -float(next_state.scores[player_idx]) - immediate_weight * immediate_penalty
+
+    if next_state.is_terminal():
+        return util
+
+    hand = next_state.hands[player_idx]
+    if not hand:
+        return util
+
+    hist = history_view(next_state)
+    x = codec.encode_partial(hand, hist, player_idx).unsqueeze(0)
+    with torch.no_grad():
+        _, value = policy_value_net(x)
+    util += float(value.item())
+    return util
+
+
+def evaluate_joint_action(
+    state: FullGameState,
+    joint_actions: List[int],
+    policy_value_net,
+    codec,
+    immediate_weight: float = 1.0,
+) -> tuple[FullGameState, List[float]]:
+    """Evaluates a full simultaneous action profile using immediate+bootstrap utility."""
+    next_state = transition_with_engine(state, joint_actions)
+    utils = [
+        _player_utility_after_joint_action(
+            state=state,
+            next_state=next_state,
+            player_idx=p_idx,
+            policy_value_net=policy_value_net,
+            codec=codec,
+            immediate_weight=immediate_weight,
+        )
+        for p_idx in range(state.n_players)
+    ]
+    return next_state, utils
+
+
 def run_root_puct(
     state: FullGameState,
     player_idx: int,
@@ -239,6 +381,7 @@ def run_root_puct(
     rng: random.Random,
     root_dirichlet_alpha: float = 0.0,
     root_dirichlet_eps: float = 0.0,
+    deadline_time: float | None = None,
 ) -> Dict[int, float]:
     """Root-only PUCT for one player under full-information training state.
 
@@ -270,8 +413,17 @@ def run_root_puct(
     N = {a: 0 for a in hand}
     W = {a: 0.0 for a in hand}
     Q = {a: 0.0 for a in hand}
+    opponent_topk = 2
+    opponent_policy_weight = 0.08
+    immediate_weight = 1.0
+    root_vs_opp_weight = 0.5
 
-    for _ in range(max(1, sims)):
+    max_sims = max(1, int(sims))
+    for sim_idx in range(max_sims):
+        # Keep at least one simulation when requested, then honor the deadline.
+        if deadline_time is not None and sim_idx > 0 and time.perf_counter() >= float(deadline_time):
+            break
+
         total_n = sum(N.values())
         best_a = hand[0]
         best_u = -1e18
@@ -286,6 +438,9 @@ def run_root_puct(
         sim_state = state.clone()
         joint = [0] * sim_state.n_players
         round_hist = history_view(sim_state)
+        candidate_lists: Dict[int, List[tuple[int, float]]] = {}
+        fallback_by_player = [0] * sim_state.n_players
+
         for p_idx in range(sim_state.n_players):
             p_hand = sim_state.hands[p_idx]
             if p_idx == player_idx:
@@ -306,21 +461,74 @@ def run_root_puct(
             weights = [float(pprobs[c - 1]) for c in candidates]
             sw = sum(weights)
             if sw <= 0.0:
-                joint[p_idx] = min(candidates)
+                fallback = min(candidates)
+                fallback_by_player[p_idx] = fallback
+                candidate_lists[p_idx] = [(fallback, 1.0)]
             else:
-                joint[p_idx] = rng.choices(candidates, weights=weights, k=1)[0]
+                norm = [w / sw for w in weights]
+                pairs = list(zip(candidates, norm))
+                pairs.sort(key=lambda x: x[1], reverse=True)
+                top = pairs[: max(1, min(opponent_topk, len(pairs)))]
+                candidate_lists[p_idx] = top
+                fallback_by_player[p_idx] = top[0][0]
 
-        sim_state = transition_with_engine(sim_state, joint)
-        end_state = rollout_with_policy(
-            sim_state,
-            policy_value_net,
-            codec,
-            rng=rng,
-            temperature=1.0,
+        # Opponents pick actions using policy priors plus value-based one-step utility.
+        for p_idx in range(sim_state.n_players):
+            if p_idx == player_idx:
+                continue
+
+            p_hand = sim_state.hands[p_idx]
+            if len(p_hand) <= 1:
+                joint[p_idx] = p_hand[0]
+                continue
+
+            candidates = candidate_lists.get(p_idx, [(fallback_by_player[p_idx], 1.0)])
+            if len(candidates) == 1:
+                joint[p_idx] = candidates[0][0]
+                continue
+
+            if deadline_time is not None and time.perf_counter() >= float(deadline_time):
+                joint[p_idx] = candidates[0][0]
+                continue
+
+            best_card = candidates[0][0]
+            best_score = -1e18
+            for cand, pprob in candidates:
+                test_joint = list(joint)
+                test_joint[player_idx] = best_a
+                test_joint[p_idx] = cand
+                for q_idx in range(sim_state.n_players):
+                    if q_idx == player_idx or q_idx == p_idx:
+                        continue
+                    q_hand = sim_state.hands[q_idx]
+                    if len(q_hand) == 1:
+                        test_joint[q_idx] = q_hand[0]
+                    else:
+                        test_joint[q_idx] = fallback_by_player[q_idx]
+
+                _, test_utils = evaluate_joint_action(
+                    state=sim_state,
+                    joint_actions=test_joint,
+                    policy_value_net=policy_value_net,
+                    codec=codec,
+                    immediate_weight=immediate_weight,
+                )
+                score = float(test_utils[p_idx]) + opponent_policy_weight * math.log(max(pprob, 1e-9))
+                if score > best_score:
+                    best_score = score
+                    best_card = cand
+            joint[p_idx] = best_card
+
+        _, utilities = evaluate_joint_action(
+            state=sim_state,
+            joint_actions=joint,
+            policy_value_net=policy_value_net,
+            codec=codec,
+            immediate_weight=immediate_weight,
         )
-
-        # Lower score is better in this game, so value is negative self score.
-        value = -float(end_state.scores[player_idx])
+        opp_utils = [utilities[i] for i in range(sim_state.n_players) if i != player_idx]
+        mean_opp = sum(opp_utils) / max(1, len(opp_utils))
+        value = float(utilities[player_idx]) - root_vs_opp_weight * float(mean_opp)
 
         N[best_a] += 1
         W[best_a] += value
@@ -330,3 +538,65 @@ def run_root_puct(
     if total <= 0.0:
         return {a: 1.0 / len(hand) for a in hand}
     return {a: N[a] / total for a in hand}
+
+
+def run_determinized_root_puct(
+    state: FullGameState,
+    player_idx: int,
+    policy_value_net,
+    codec,
+    total_sims: int,
+    c_puct: float,
+    rng: random.Random,
+    determinization_samples: int = 1,
+    root_dirichlet_alpha: float = 0.0,
+    root_dirichlet_eps: float = 0.0,
+    deadline_time: float | None = None,
+) -> Dict[int, float]:
+    """Run root PUCT over multiple determinizations and aggregate visit fractions.
+
+    This is the training/inference shared search routine for hidden-information play.
+    """
+    hand = list(state.hands[player_idx])
+    if len(hand) == 1:
+        return {hand[0]: 1.0}
+
+    k_det = max(1, int(determinization_samples))
+    remaining_sims = max(1, int(total_sims))
+    agg = {c: 0.0 for c in hand}
+    used_dets = 0
+
+    for det_i in range(k_det):
+        if deadline_time is not None and time.perf_counter() >= float(deadline_time):
+            break
+
+        det_state = determinize_state_for_player(state, player_idx, rng)
+        dets_left = k_det - det_i
+        sims_this = max(1, remaining_sims // max(1, dets_left))
+
+        visit_dist = run_root_puct(
+            state=det_state,
+            player_idx=player_idx,
+            policy_value_net=policy_value_net,
+            codec=codec,
+            sims=sims_this,
+            c_puct=c_puct,
+            rng=rng,
+            root_dirichlet_alpha=root_dirichlet_alpha if det_i == 0 else 0.0,
+            root_dirichlet_eps=root_dirichlet_eps if det_i == 0 else 0.0,
+            deadline_time=deadline_time,
+        )
+        remaining_sims = max(0, remaining_sims - sims_this)
+        used_dets += 1
+
+        for c in hand:
+            agg[c] += float(visit_dist.get(c, 0.0))
+
+    if used_dets <= 0:
+        return {a: 1.0 / len(hand) for a in hand}
+
+    merged = {c: agg[c] / float(used_dets) for c in hand}
+    total = sum(merged.values())
+    if total <= 0.0:
+        return {a: 1.0 / len(hand) for a in hand}
+    return {c: merged[c] / total for c in hand}

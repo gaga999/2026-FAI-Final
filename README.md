@@ -86,69 +86,54 @@ class BestPlayer1:
 *   **Low Card Rule**: If a played card is lower than the last card of all rows, the player takes the row with the **lowest score**.
     *   Tie-breaking: Lowest card count -> Smallest row index.
 
-## MCTS + PUCT Training Pipeline (Implemented)
+## MCTS + PUCT Training (Current)
 
-This repository now includes an offline training pipeline with engine-driven transitions and partial-observation-aligned policy inference.
+This repo uses a single consistent training/inference pipeline:
+* Training target policy is produced by determinization + root PUCT (`run_determinized_root_puct`).
+* Inference in `BestPlayer1` strong mode uses the same search core with a strict time deadline.
+* Game transitions are always executed by the current engine rules.
 
 ### Files
 * `train_mcts_puct.py`: self-play training entrypoint.
-* `src/training/state_codec.py`: partial-observation encoder with recent-history window features.
+* `src/training/state_codec.py`: partial-observation state encoder.
 * `src/training/policy_value_net.py`: policy-value network.
-* `src/training/mcts_core.py`: root PUCT search and rollout utilities (engine-backed transition simulation).
-* `src/players/b13902102/best_player1.py`: submission-ready player (fast/strong modes).
+* `src/training/mcts_core.py`: determinization + root PUCT search utilities.
+* `src/players/b13902102/best_player1.py`: inference player (fast/strong).
+* `configs/game/train_selfplay_example.json`: recommended training config (engine + train params).
 
-### Why this architecture is safe
-* **Training phase now advances rounds through `Engine.play_round()`**, so rule execution is consistent with inference/tournament runtime.
-* **Inference phase only uses `action(hand, history)` inputs** (partial observation), so no hidden information is read by the submitted player.
-* **Policy priors are generated from partial observations**; opponent actions in training search/rollout are sampled from legal hands to reduce hidden-information leakage in policy inference.
-* **State encoder includes ordered recent history (`history_k`)** instead of only unordered seen-card aggregation.
-* **Training loop now follows AlphaZero-style stabilizers**: replay buffer, frozen search network, mini-batch updates, and periodic target sync.
+### Train (recommended)
+```bash
+python3 train_mcts_puct.py --config configs/game/train_selfplay_example.json
+```
 
-### Train
+`configs/game/train_selfplay_example.json` already contains the recommended parameters.
+
+### Optional overrides
+Only override when needed. CLI overrides config values.
+
 ```bash
 python3 train_mcts_puct.py \
     --config configs/game/train_selfplay_example.json \
-    --episodes 200 \
-    --sims 32 \
-    --history-k 4 \
-    --replay-size 50000 \
-    --min-replay 1024 \
-    --batch-size 256 \
-    --updates-per-episode 8 \
-    --target-sync-interval 20 \
+    --episodes 1200 \
+    --sims 24 \
     --output artifacts/mcts_puct_policy.pt
 ```
 
-Optional debug tracing (first 2 episodes):
+### Quick debug run
 ```bash
 python3 train_mcts_puct.py \
     --config configs/game/train_selfplay_example.json \
-    --episodes 10 \
-    --sims 8 \
-    --history-k 4 \
-    --debug-trace \
+    --episodes 3000 \
     --output artifacts/mcts_puct_policy.pt
 ```
 
-### New/updated training CLI args
-* `--history-k` (default: `4`): number of recent rounds encoded as ordered one-hot history features.
-* `--replay-size` / `--min-replay`: replay capacity and warmup threshold before updates.
-* `--batch-size` / `--updates-per-episode`: learner optimization workload each episode.
-* `--target-sync-interval`: how often search network copies learner weights.
-* `--root-dirichlet-alpha` / `--root-dirichlet-eps`: root exploration noise for MCTS targets.
-* `--value-weight` / `--entropy-weight`: objective balancing terms.
-* `--grad-clip` / `--weight-decay`: optimization stability controls.
-* `--debug-trace`: prints per-round sampled joint actions, legal sets, and encoder dimension for debugging.
-
-### Checkpoint compatibility note
-New checkpoints include codec metadata (version/history settings). Player loading expects this metadata (`codec.version = 2`).
-Older raw `state_dict` checkpoints are treated as legacy and should be retrained or explicitly migrated.
-
-### Run a single game with trained player
+### Run trained model in a game
 ```bash
 python3 run_single_game.py --config configs/game/mcts_puct_player_example.json
 ```
 
-### Player mode
-* `mode="fast"`: policy-only argmax, strongest latency robustness.
-* `mode="strong"`: lightweight root PUCT (time-budgeted) for stronger play.
+### Notes
+* Keep `--updates-per-episode 1` in this codebase unless you also retune learning rate and replay settings.
+* The replay buffer is intentionally a recent window, not a long archive, to reduce stale self-play targets.
+* Checkpoints include codec metadata and are required by `BestPlayer1` loader.
+* Deprecated training docs that required manually specifying the full recommended flag list were removed. Use the config-first flow above.

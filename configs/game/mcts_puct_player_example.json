@@ -4,8 +4,11 @@
             "path": "src.players.b13902102.best_player1",
             "class": "BestPlayer1",
             "args": {
-                "mode": "fast",
-                "model_path": "artifacts/mcts_puct_policy.pt"
+                "mode": "strong",
+                "model_path": "artifacts/mcts_puct_policy.pt",
+                "puct_sims": 96,
+                "determinization_samples": 3,
+                "deadline_s": 0.88
             },
             "label": "mcts-puct"
         },

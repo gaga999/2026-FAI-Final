@@ -6,6 +6,33 @@
         "board_size_x": 5,
         "board_size_y": 4,
         "verbose": false,
-        "seed": 42
+        "seed": null
+    },
+    "train": {
+        "n_episodes": 600,
+        "lr": 0.0007,
+        "hidden_dim": 256,
+        "sims_per_move": 16,
+        "c_puct": 1.5,
+        "seed": 42,
+        "device": "cpu",
+        "save_every": 50,
+        "history_k": 4,
+        "replay_size": 4096,
+        "min_replay": 4096,
+        "batch_size": 128,
+        "updates_per_episode": 1,
+        "value_weight": 1.0,
+        "entropy_weight": 0.001,
+        "grad_clip": 1.0,
+        "weight_decay": 0.0001,
+        "target_sync_interval": 5,
+        "root_dirichlet_alpha": 0.15,
+        "root_dirichlet_eps": 0.10,
+        "determinization_samples": 1,
+        "deal_seed_mode": "episode",
+        "immediate_value_weight": 0.30,
+        "debug_trace": false,
+        "output": "artifacts/mcts_puct_policy.pt"
     }
 }
