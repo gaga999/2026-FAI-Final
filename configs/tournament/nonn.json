@@ -1,10 +1,16 @@
 {
     "players": [
         [
+            "src.players.b13902102.best_player1",
+            "BestPlayer1",
+            {},
+            "me"
+        ],
+        [
             "src.players.b13902102.best_player2",
             "BestPlayer2",
             {},
-            "me"
+            "me2"
         ],
         [
             "src.players.b13902066.best_player1",
