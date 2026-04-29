@@ -124,15 +124,15 @@ class BestPlayer2:
                 return False
         return True
 
-    def _bullheads(self, card):
-        if card == 55:
-            return 55
+    def _bullheads(self, card: int) -> int:
+        if card % 55 == 0:
+            return 7
         if card % 11 == 0:
-            return 22
-        if card % 10 == 0:
-            return 10
-        if card % 5 == 0:
             return 5
+        if card % 10 == 0:
+            return 3
+        if card % 5 == 0:
+            return 2
         return 1
 
     def _row_penalty(self, row: List[int]) -> int:
