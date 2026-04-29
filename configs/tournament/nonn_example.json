@@ -1,0 +1,65 @@
+{
+    "players": [
+        [
+            "src.players.b13902102.best_player2",
+            "BestPlayer2",
+            {},
+            "me"
+        ],
+        [
+            "src.players.pixelcat.best_player1",
+            "BestPlayer1",
+            {},
+            "cat-rank"
+        ],
+        [
+            "src.players.pixelcat.best_player2",
+            "BestPlayer2",
+            {},
+            "cat-score"
+        ],
+        [
+            "src.players.b13902066.best_player1",
+            "BestPlayer1",
+            {},
+            "p1"
+        ],
+        [
+            "src.players.b13902057.first_player",
+            "FirstPlayer",
+            {},
+            "p2"
+        ],
+        [
+            "src.players.TA.random_player",
+            "RandomPlayer",
+            {},
+            "random-1"
+        ],
+        [
+            "src.players.TA.random_player",
+            "RandomPlayer",
+            {},
+            "random-2"
+        ],
+        [
+            "src.players.TA.random_player",
+            "RandomPlayer",
+            {},
+            "random-3"
+        ]
+    ],
+    "engine": {
+        "n_players": 4,
+        "n_rounds": 10,
+        "verbose": false,
+        "timeout": 1.0,
+        "timeout_buffer": 0.5
+    },
+    "tournament": {
+        "type": "random_partition",
+        "duplication_mode": "cycle",
+        "num_games_per_player": 200,
+        "num_workers": 4
+    }
+}
