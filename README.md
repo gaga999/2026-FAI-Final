@@ -11,13 +11,13 @@ The framework provides two main scripts for evaluating players, both driven by J
 ### 1. Single Game Simulation
 Use `run_single_game.py` to run a single match. It supports detailed logging and captures initial hands and history outputs.
 ```bash
-python3 run_single_game.py --config configs/game/example.json
+python run_single_game.py --config configs/game/example.json
 ```
 
 ### 2. Tournaments
 Use `run_tournament.py` to run large-scale evaluations.
 ```bash
-python3 run_tournament.py --config configs/tournament/example.json
+python run_tournament.py --config configs/tournament/example.json
 ```
 *Optional config overrides*: You can mix-and-match configurations via the command line using `--player-cfg`, `--engine-cfg`, or `--tournament-cfg`.
 
@@ -42,6 +42,7 @@ Settings that control the inner game mechanics:
 
 ### 3. `tournament`
 Settings specific to the `run_tournament.py` runner (ignored by `run_single_game.py`):
+*   `grading_mode`: Boolean (default: `false`). When `true`, pins `torch.set_num_threads(1)` (and related env vars like `OMP_NUM_THREADS`) so accidental thread-level parallelism is disabled, and suppresses per-game stdout so only the final standings are printed. This is the mode used during official evaluation.
 *   `type`: Type of tournament to run (`combination`, `random_partition`, or `grouped_random_partition`). **The `random_partition` tournament format will be used in final evaluations.**
 *   `duplication_mode`: String (`"permutations"`, `"cycle"`, or `"none"`). Determines how hands are duplicated to reduce RNG variance. `"permutations"` plays $N!$ games with all seat assignments, `"cycle"` plays $N$ games shifting hands, and `"none"` plays 1 game. (Legacy boolean `use_permutations` is also supported).
 *   `num_games_per_player` & `num_workers`: Used by `random_partition` to control the number of games played and parallel processing threads.
@@ -86,54 +87,7 @@ class BestPlayer1:
 *   **Low Card Rule**: If a played card is lower than the last card of all rows, the player takes the row with the **lowest score**.
     *   Tie-breaking: Lowest card count -> Smallest row index.
 
-## MCTS + PUCT Training (Current)
-
-This repo uses a single consistent training/inference pipeline:
-* Training target policy is produced by determinization + root PUCT (`run_determinized_root_puct`).
-* Inference in `BestPlayer1` strong mode uses the same search core with a strict time deadline.
-* Game transitions are always executed by the current engine rules.
-
-### Files
-* `train_mcts_puct.py`: self-play training entrypoint.
-* `src/training/state_codec.py`: partial-observation state encoder.
-* `src/training/policy_value_net.py`: policy-value network.
-* `src/training/mcts_core.py`: determinization + root PUCT search utilities.
-* `src/players/b13902102/best_player1.py`: inference player (fast/strong).
-* `configs/game/train_selfplay_example.json`: recommended training config (engine + train params).
-
-### Train (recommended)
-```bash
-python3 train_mcts_puct.py --config configs/game/train_selfplay_example.json
-```
-
-`configs/game/train_selfplay_example.json` already contains the recommended parameters.
-
-### Optional overrides
-Only override when needed. CLI overrides config values.
-
-```bash
-python3 train_mcts_puct.py \
-    --config configs/game/train_selfplay_example.json \
-    --episodes 1200 \
-    --sims 24 \
-    --output artifacts/mcts_puct_policy.pt
-```
-
-### Quick debug run
-```bash
-python3 train_mcts_puct.py \
-    --config configs/game/train_selfplay_example.json \
-    --episodes 3000 \
-    --output artifacts/mcts_puct_policy.pt
-```
-
-### Run trained model in a game
-```bash
-python3 run_single_game.py --config configs/game/mcts_puct_player_example.json
-```
-
-### Notes
-* Keep `--updates-per-episode 1` in this codebase unless you also retune learning rate and replay settings.
-* The replay buffer is intentionally a recent window, not a long archive, to reduce stale self-play targets.
-* Checkpoints include codec metadata and are required by `BestPlayer1` loader.
-* Deprecated training docs that required manually specifying the full recommended flag list were removed. Use the config-first flow above.
+## Constraints
+*   1 second timeout for each round
+*   1 GB RAM
+*   No multi-process/thread
