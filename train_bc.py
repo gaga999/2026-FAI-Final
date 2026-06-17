@@ -16,20 +16,22 @@ from src.players.b13902102.rl_model import PolicyMLP, save_policy_checkpoint, su
 
 
 DEFAULT_TEACHERS = [
-    ("src.players.b13902102.best_player1", "BestPlayer1", 3.0),
-    ("src.players.b13902102.best_player2", "BestPlayer2", 3.0),
+    ("src.players.b13902102.best_player1", "BestPlayer1", 4.0),
+    ("src.players.b13902102.best_player2", "BestPlayer2", 2.0),
     ("src.players.b13902102.adaptive_portfolio_player", "AdaptivePortfolioPlayer", 2.0),
-    ("src.players.TA.public_baselines2", "Baseline6", 1.5),
-    ("src.players.TA.public_baselines2", "Baseline7", 1.5),
-    ("src.players.TA.public_baselines2", "Baseline8", 1.5),
-    ("src.players.TA.public_baselines2", "Baseline9", 1.5),
-    ("src.players.TA.public_baselines2", "Baseline10", 1.5),
-    ("src.players.b13902102.risk_heuristic_player", "RiskHeuristicPlayer", 0.35),
+    ("src.players.b13902102.rollout_search_player", "RolloutSearchPlayer", 4.0),
+    ("src.players.b13902102.beam_expectimax_player", "BeamExpectimaxPlayer", 1.0),
+    ("src.players.TA.public_baselines2", "Baseline6", 5.0),
+    ("src.players.TA.public_baselines2", "Baseline7", 5.0),
+    ("src.players.TA.public_baselines2", "Baseline8", 3.0),
+    ("src.players.TA.public_baselines2", "Baseline9", 5.0),
+    ("src.players.TA.public_baselines2", "Baseline10", 6.0),
+    ("src.players.b13902102.risk_heuristic_player", "RiskHeuristicPlayer", 0.2),
     ("src.players.TA.public_baselines1", "Baseline1", 0.35),
     ("src.players.TA.public_baselines1", "Baseline2", 0.35),
     ("src.players.TA.public_baselines1", "Baseline3", 0.35),
-    ("src.players.TA.public_baselines1", "Baseline4", 0.35),
-    ("src.players.TA.public_baselines1", "Baseline5", 0.35),
+    ("src.players.TA.public_baselines1", "Baseline4", 2.5),
+    ("src.players.TA.public_baselines1", "Baseline5", 2.5),
 ]
 
 
