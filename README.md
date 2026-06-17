@@ -126,3 +126,22 @@ python3 run_tournament.py --config configs/tournament/test.json
 ```
 
 `configs/game/test.json` runs the risk heuristic against released public baselines. `configs/tournament/test.json` includes the method agents plus released public baselines as scoring anchors.
+
+## b13902102 RL Training Pipeline
+
+The model-based training scaffold is documented in [docs/b13902102_rl_training_spec.md](/Users/chengjieyuan/Desktop/114/114下/FAI/final/2026-FAI-Final/docs/b13902102_rl_training_spec.md).
+
+Root training entry points:
+
+```bash
+python3 train_bc.py --num-games 2000 --checkpoint artifacts/b13902102/bc_policy.pth
+python3 train_mcs_selfplay.py --init-checkpoint artifacts/b13902102/bc_policy.pth --population-dir artifacts/b13902102/population
+python3 train_ppo_selfplay.py --init-checkpoint artifacts/b13902102/population/archive/best.pth --output-checkpoint artifacts/b13902102/ppo_policy.pth
+```
+
+Model-based player entries:
+
+```json
+["src.players.b13902102.policy_model_player", "PolicyModelPlayer", {}, "policy"]
+["src.players.b13902102.mcts_model_player", "MCTSModelPlayer", {"sims": 48}, "mcts-policy"]
+```
