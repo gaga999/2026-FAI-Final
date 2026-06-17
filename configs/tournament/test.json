@@ -85,6 +85,18 @@
             "beam-expectimax"
         ],
         [
+            "src.players.b13902102.best_player1",
+            "BestPlayer1",
+            {},
+            "bestplayer1"
+        ],
+        [
+            "src.players.b13902102.best_player2",
+            "BestPlayer2",
+            {},
+            "bestplayer2"
+        ],
+        [
             "src.players.b13902102.adaptive_portfolio_player",
             "AdaptivePortfolioPlayer",
             {
