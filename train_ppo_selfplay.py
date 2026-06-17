@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parent))
 
@@ -45,13 +46,17 @@ def run_episode(model, rng, temperature=1.0):
 
 def train_ppo_lite(init_checkpoint, output_checkpoint, episodes=1000, batch_size=512, lr=1.0e-5, clip_ratio=0.15, entropy_coef=0.005, seed=0):
     rng = random.Random(seed)
+    print(f"[PPO] Loading checkpoint: {init_checkpoint}", flush=True)
     model, _, _ = load_checkpoint(init_checkpoint)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1.0e-4)
     replay = []
-    for _ in range(int(episodes)):
+    print(f"[PPO] Training PPO-lite: episodes={int(episodes)}, batch_size={int(batch_size)}, lr={float(lr)}", flush=True)
+    episode_bar = tqdm(range(1, int(episodes) + 1), desc="PPO episodes", unit="episode")
+    for episode in episode_bar:
         model.eval()
         replay.extend(run_episode(model, rng))
         if len(replay) < batch_size:
+            episode_bar.set_postfix(replay=len(replay), status="collecting")
             continue
         batch = rng.sample(replay, batch_size)
         features = torch.tensor([row[0] for row in batch], dtype=torch.float32)
@@ -77,6 +82,10 @@ def train_ppo_lite(init_checkpoint, output_checkpoint, episodes=1000, batch_size
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         replay = replay[-20000:]
+        episode_bar.set_postfix(replay=len(replay), loss=f"{float(loss.detach().cpu()):.4f}")
+        if episode % 50 == 0:
+            tqdm.write(f"[PPO] Episode {episode}/{int(episodes)}: loss={float(loss.detach().cpu()):.4f}, replay={len(replay)}")
+    print(f"[PPO] Saving checkpoint: {output_checkpoint}", flush=True)
     save_checkpoint(output_checkpoint, model, optimizer, stage="ppo_lite", init_checkpoint=str(init_checkpoint))
 
 
@@ -88,6 +97,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     train_ppo_lite(args.init_checkpoint, args.output_checkpoint, episodes=args.episodes, seed=args.seed)
+    print("[PPO] Done", flush=True)
 
 
 if __name__ == "__main__":

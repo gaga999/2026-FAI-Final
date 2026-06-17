@@ -139,6 +139,8 @@ python3 train_mcs_selfplay.py --init-checkpoint artifacts/b13902102/bc_policy.pt
 python3 train_ppo_selfplay.py --init-checkpoint artifacts/b13902102/population/archive/best.pth --output-checkpoint artifacts/b13902102/ppo_policy.pth
 ```
 
+`train_bc.py` defaults to fast teacher collection for slow local search teachers. Add `--full-teachers` when you want slower full-budget teacher data.
+
 Model-based player entries:
 
 ```json

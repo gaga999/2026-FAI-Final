@@ -192,6 +192,8 @@ low: pure heuristic and public baselines 1-5
 
 The black-box baseline `.so` players are treated like normal imported Python classes; the wrapper only observes their input/output.
 
+By default, `train_bc.py` uses a fast teacher mode for local search teachers (`best_player1`, `best_player2`, adaptive portfolio, rollout, beam) so a default BC run starts producing data quickly. Use `--full-teachers` to disable the reduced deadline/rollout budgets and collect slower but stronger teacher behavior.
+
 Training loss:
 
 ```text
@@ -388,6 +390,8 @@ python3 train_bc.py \
   --dataset artifacts/b13902102/bc_dataset.pt \
   --checkpoint artifacts/b13902102/bc_policy.pth
 ```
+
+The script prints phase boundaries and uses `tqdm` for game and epoch progress.
 
 MCS population self-play:
 

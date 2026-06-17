@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 from .rl_checkpoint import clone_checkpoint, load_checkpoint, save_checkpoint
 from .rl_features import action_index, extract_policy_features
@@ -86,17 +87,30 @@ class PopulationTrainer:
             )
             self.replay[agent_id] = []
 
-    def train_selfplay_games(self, num_games, sims=32, updates_per_game=1):
-        for game_idx in range(int(num_games)):
+    def train_selfplay_games(self, num_games, sims=32, updates_per_game=1, progress=False, desc=None):
+        iterator = range(int(num_games))
+        if progress:
+            iterator = tqdm(iterator, desc=desc or "MCS self-play games", unit="game", leave=False)
+        for game_idx in iterator:
             seats = self.sample_matchup()
             transitions = self._play_training_game(seats, sims=sims, seed=self.rng.randrange(10**9))
             for agent_id, rows in transitions.items():
                 self.replay.setdefault(agent_id, []).extend(rows)
                 if len(self.replay[agent_id]) > self.replay_limit:
                     self.replay[agent_id] = self.replay[agent_id][-self.replay_limit :]
+            losses = []
             for _ in range(int(updates_per_game)):
                 for slot in self.slots:
-                    self._update_agent(slot)
+                    loss = self._update_agent(slot)
+                    if loss is not None:
+                        losses.append(loss)
+            if progress:
+                replay_rows = sum(len(rows) for rows in self.replay.values())
+                avg_loss = sum(losses) / len(losses) if losses else None
+                postfix = {"matchup": ",".join(str(agent_id) for agent_id in seats), "replay": replay_rows}
+                if avg_loss is not None:
+                    postfix["loss"] = f"{avg_loss:.4f}"
+                iterator.set_postfix(postfix)
 
     def sample_matchup(self):
         roll = self.rng.random()
@@ -121,11 +135,14 @@ class PopulationTrainer:
             return selected
         return self.rng.sample(ids, 4)
 
-    def evaluate_frozen(self, partitions=16, sims=8):
+    def evaluate_frozen(self, partitions=16, sims=8, progress=False, desc=None):
         stats = {slot.agent_id: {"rank": 0.0, "points": 0.0, "score": 0.0, "games": 0} for slot in self.slots}
         pairwise = {slot.agent_id: {other.agent_id: 0.0 for other in self.slots} for slot in self.slots}
         ids = [slot.agent_id for slot in self.slots]
-        for _ in range(int(partitions)):
+        iterator = range(int(partitions))
+        if progress:
+            iterator = tqdm(iterator, desc=desc or "Frozen eval partitions", unit="partition", leave=False)
+        for partition_idx in iterator:
             shuffled = ids[:]
             self.rng.shuffle(shuffled)
             for table in [shuffled[i : i + 4] for i in range(0, len(shuffled), 4)]:
@@ -148,6 +165,9 @@ class PopulationTrainer:
                             pairwise[table[i]][table[j]] += 1.0
                         elif ranks[i] == ranks[j]:
                             pairwise[table[i]][table[j]] += 0.5
+            if progress:
+                games_so_far = sum(raw["games"] for raw in stats.values())
+                iterator.set_postfix(games=games_so_far)
 
         records = {}
         for slot in self.slots:
