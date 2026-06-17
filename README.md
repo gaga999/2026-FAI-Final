@@ -99,6 +99,7 @@ The original `best_player1.py` and `best_player2.py` files are kept as legacy pl
 * `RiskHeuristicPlayer` in `risk_heuristic_player.py`: fast deterministic risk heuristic. It simulates exact immediate placement, estimates opponent interval pressure, penalizes low-card forced takes and high bullhead cards, and uses a stable fallback to the smallest legal card on ordinary exceptions.
 * `RolloutSearchPlayer` in `rollout_search_player.py`: bounded rollout search. It uses the heuristic selector as the fallback, samples hidden opponent hands from unseen cards, resolves turns with a local engine-compatible simulator, and stops before the 1-second timeout.
 * `BeamExpectimaxPlayer` in `beam_expectimax_player.py`: deterministic shallow beam/expectimax alternative. It samples plausible opponent actions from heuristic top-k choices and evaluates short-horizon leaf states without training a model.
+* `AdaptivePortfolioPlayer` in `adaptive_portfolio_player.py`: one-turn portfolio search designed after comparing the legacy best players. It keeps many cheap current-turn samples, uses an opponent policy mixture, and blends mean cost with worst-case and bad-event rates.
 
 Shared helper files:
 
@@ -124,4 +125,4 @@ Tournament configs:
 python3 run_tournament.py --config configs/tournament/test.json
 ```
 
-`configs/game/test.json` runs the risk heuristic against released public baselines. `configs/tournament/test.json` includes all three method agents plus released public baselines as scoring anchors.
+`configs/game/test.json` runs the risk heuristic against released public baselines. `configs/tournament/test.json` includes the method agents plus released public baselines as scoring anchors.

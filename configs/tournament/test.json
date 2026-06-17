@@ -83,6 +83,14 @@
                 "deadline_s": 0.10
             },
             "beam-expectimax"
+        ],
+        [
+            "src.players.b13902102.adaptive_portfolio_player",
+            "AdaptivePortfolioPlayer",
+            {
+                "deadline_s": 0.10
+            },
+            "adaptive-portfolio"
         ]
     ],
     "engine": {
