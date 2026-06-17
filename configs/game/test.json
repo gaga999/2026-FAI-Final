@@ -7,22 +7,22 @@
             "risk-heuristic"
         ],
         [
-            "src.players.TA.public_baselines1",
-            "Baseline1",
+            "src.players.TA.public_baselines2",
+            "Baseline7",
             {},
-            "B1"
+            "B7"
         ],
         [
-            "src.players.TA.public_baselines1",
-            "Baseline2",
+            "src.players.TA.public_baselines2",
+            "Baseline9",
             {},
-            "B2"
+            "B9"
         ],
         [
-            "src.players.TA.public_baselines1",
-            "Baseline3",
+            "src.players.TA.public_baselines2",
+            "Baseline10",
             {},
-            "B3"
+            "B10"
         ]
     ],
     "engine": {
