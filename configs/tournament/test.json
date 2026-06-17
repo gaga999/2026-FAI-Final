@@ -1,73 +1,15 @@
 {
     "baselines": [
-        [
-            "src.players.TA.public_baselines1",
-            "Baseline1",
-            {},
-            "B1"
-        ],
-        [
-            "src.players.TA.public_baselines1",
-            "Baseline2",
-            {},
-            "B2"
-        ],
-        [
-            "src.players.TA.public_baselines1",
-            "Baseline3",
-            {},
-            "B3"
-        ],
-        [
-            "src.players.TA.public_baselines1",
-            "Baseline4",
-            {},
-            "B4"
-        ],
-        [
-            "src.players.TA.public_baselines1",
-            "Baseline5",
-            {},
-            "B5"
-        ]
+        ["src.players.TA.public_baselines1", "Baseline1", {}, "B1"],
+        ["src.players.TA.public_baselines1", "Baseline2", {}, "B2"],
+        ["src.players.TA.public_baselines1", "Baseline3", {}, "B3"],
+        ["src.players.TA.public_baselines1", "Baseline4", {}, "B4"],
+        ["src.players.TA.public_baselines1", "Baseline5", {}, "B5"]
     ],
     "players": [
-        [
-            "src.players.b13902102.best_player2",
-            "BestPlayer2",
-            {},
-            "me"
-        ],
-        [
-            "src.players.b13902066.best_player1",
-            "BestPlayer1",
-            {},
-            "p1"
-        ],
-        [
-            "src.players.b13902057.first_player",
-            "FirstPlayer",
-            {},
-            "p2"
-        ],
-        [
-            "src.players.TA.random_player",
-            "RandomPlayer",
-            {},
-            "random-1"
-        ],
-        [
-            "src.players.TA.random_player",
-            "RandomPlayer",
-            {},
-            "random-2"
-        ],
-        [
-            "src.players.TA.random_player",
-            "RandomPlayer",
-            {},
-            "random-3"
-        ]
+        ["src.players.b13902102.risk_heuristic_player", "RiskHeuristicPlayer", {}, "risk-heuristic"],
+        ["src.players.b13902102.rollout_search_player", "RolloutSearchPlayer", {"deadline_s": 0.70}, "rollout-search"],
+        ["src.players.b13902102.beam_expectimax_player", "BeamExpectimaxPlayer", {"deadline_s": 0.70}, "beam-expectimax"]
     ],
     "engine": {
         "n_players": 4,

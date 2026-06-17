@@ -91,3 +91,37 @@ class BestPlayer1:
 *   1 second timeout for each round
 *   1 GB RAM
 *   No multi-process/thread
+
+## b13902102 Agents
+
+The original `best_player1.py` and `best_player2.py` files are kept as legacy players. The new non-training methods are added as separate method-named agents under `src/players/b13902102/`.
+
+* `RiskHeuristicPlayer` in `risk_heuristic_player.py`: fast deterministic risk heuristic. It simulates exact immediate placement, estimates opponent interval pressure, penalizes low-card forced takes and high bullhead cards, and uses a stable fallback to the smallest legal card on ordinary exceptions.
+* `RolloutSearchPlayer` in `rollout_search_player.py`: bounded rollout search. It uses the heuristic selector as the fallback, samples hidden opponent hands from unseen cards, resolves turns with a local engine-compatible simulator, and stops before the 1-second timeout.
+* `BeamExpectimaxPlayer` in `beam_expectimax_player.py`: deterministic shallow beam/expectimax alternative. It samples plausible opponent actions from heuristic top-k choices and evaluates short-horizon leaf states without training a model.
+
+Shared helper files:
+
+* `rules.py`: bullhead scoring, low-card tie-breaks, one-card placement, simultaneous turn resolution, and history parsing.
+* `features.py`: stable per-action feature extraction for later model-based agents.
+* `heuristic.py`: scoring and card ranking used by all three method agents.
+* `rollout.py`: hidden-hand sampling and rollout simulation for `RolloutSearchPlayer`.
+* `beam_search.py`: shallow beam/expectimax expansion for `BeamExpectimaxPlayer`.
+
+The implementation follows the uploaded strategy specs where they match the engine. One practical adjustment is that the search players use conservative soft deadlines around `0.70-0.74` seconds rather than trying to consume the whole 1-second action limit, because the official timeout is implemented with a `BaseException` signal and should not be caught.
+
+## Useful b13902102 Configs
+
+Single-game configs:
+
+```bash
+python3 run_single_game.py --config configs/game/test.json
+```
+
+Tournament configs:
+
+```bash
+python3 run_tournament.py --config configs/tournament/test.json
+```
+
+`configs/game/test.json` runs the risk heuristic against released public baselines. `configs/tournament/test.json` includes all three method agents plus released public baselines as scoring anchors.

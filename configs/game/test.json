@@ -1,14 +1,11 @@
 {
     "players": [
-        {
-            "path": "src.players.b13902102.best_player1",
-            "class": "BestPlayer1",
-            "args": {
-                "mode": "fast",
-                "model_path": "artifacts/mcts_puct_policy.pt"
-            },
-            "label": "mcts-puct"
-        },
+        [
+            "src.players.b13902102.risk_heuristic_player",
+            "RiskHeuristicPlayer",
+            {},
+            "risk-heuristic"
+        ],
         [
             "src.players.TA.public_baselines1",
             "Baseline1",
