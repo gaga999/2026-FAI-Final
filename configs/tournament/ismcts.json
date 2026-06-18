@@ -52,16 +52,8 @@
     "players": [
         [
             "src.players.b13902102.ismcts_player",
-            "BeliefISMCTSPlayer",
-            {
-                "deadline_s": 0.9,
-                "max_iterations": 20000,
-                "c_puct": 2.25,
-                "root_warmup_passes": 3,
-                "particle_count": 128,
-                "proposal_count": 192,
-                "tree_horizon": 5
-            },
+            "ISMCTSPlayer",
+            {},
             "belief-ismcts"
         ],
         [
@@ -80,9 +72,17 @@
             "src.players.b13902102.adaptive_portfolio_player",
             "AdaptivePortfolioPlayer",
             {
-                "deadline_s": 0.8
+                "deadline_s": 0.9
             },
             "adaptive-portfolio"
+        ],
+        [
+            "src.players.b13902102.rollout_search_player",
+            "RolloutSearchPlayer",
+            {
+                "deadline_s": 0.9
+            },
+            "rollout"
         ]
     ],
     "engine": {
