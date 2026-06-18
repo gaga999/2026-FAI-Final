@@ -32,10 +32,10 @@ BASELINE_OPPONENTS = [
     # ("src.players.TA.public_baselines2", "Baseline7", 4.0),
     # ("src.players.TA.public_baselines2", "Baseline6", 4.0),
     # ("src.players.TA.public_baselines1", "Baseline5", 2.0),
-    # ("src.players.TA.public_baselines", "Baseline4", 2.0),
-    # ("src.players.TA.public_baselines", "Baseline3", 1.0),
-    # ("src.players.TA.public_baselines", "Baseline2", 1.0),
-    # ("src.players.TA.public_baselines", "Baseline1", 1.0),
+    # ("src.players.TA.public_baselines1", "Baseline4", 2.0),
+    # ("src.players.TA.public_baselines1", "Baseline3", 1.0),
+    # ("src.players.TA.public_baselines1", "Baseline2", 1.0),
+    # ("src.players.TA.public_baselines1", "Baseline1", 1.0),
 ]
 
 BASELINE_OPPONENT_ARGS = {
