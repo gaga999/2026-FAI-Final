@@ -24,9 +24,18 @@ BASELINE_OPPONENTS = [
     ("src.players.b13902102.best_player1", "BestPlayer1", 2.0),
     ("src.players.b13902102.best_player2", "BestPlayer2", 1.5),
     ("src.players.b13902102.adaptive_portfolio_player", "AdaptivePortfolioPlayer", 1.5),
-    ("src.players.b13902102.rollout_search_player", "RolloutSearchPlayer", 2.0),
+    ("src.players.b13902102.rollout_search_player", "RolloutSearchPlayer", 3.5),
     ("src.players.b13902102.beam_expectimax_player", "BeamExpectimaxPlayer", 1.0),
-    # ("src.players.TA.public_baselines2", "Baseline10", 2.0),
+    # ("src.players.TA.public_baselines2", "Baseline10", 8.0),
+    # ("src.players.TA.public_baselines2", "Baseline9", 4.0),
+    # ("src.players.TA.public_baselines2", "Baseline8", 4.0),
+    # ("src.players.TA.public_baselines2", "Baseline7", 4.0),
+    # ("src.players.TA.public_baselines2", "Baseline6", 4.0),
+    # ("src.players.TA.public_baselines1", "Baseline5", 2.0),
+    # ("src.players.TA.public_baselines", "Baseline4", 2.0),
+    # ("src.players.TA.public_baselines", "Baseline3", 1.0),
+    # ("src.players.TA.public_baselines", "Baseline2", 1.0),
+    # ("src.players.TA.public_baselines", "Baseline1", 1.0),
 ]
 
 BASELINE_OPPONENT_ARGS = {
