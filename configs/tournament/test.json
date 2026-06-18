@@ -72,7 +72,7 @@
             "src.players.b13902102.rollout_search_player",
             "RolloutSearchPlayer",
             {
-                "deadline_s": 0.10
+                "deadline_s": 0.80
             },
             "rollout-search"
         ],
@@ -80,7 +80,7 @@
             "src.players.b13902102.beam_expectimax_player",
             "BeamExpectimaxPlayer",
             {
-                "deadline_s": 0.10
+                "deadline_s": 0.80
             },
             "beam-expectimax"
         ],
@@ -100,7 +100,7 @@
             "src.players.b13902102.adaptive_portfolio_player",
             "AdaptivePortfolioPlayer",
             {
-                "deadline_s": 0.10
+                "deadline_s": 0.80
             },
             "adaptive-portfolio"
         ]
@@ -115,7 +115,7 @@
     "tournament": {
         "type": "random_partition",
         "duplication_mode": "cycle",
-        "num_games_per_player": 20,
+        "num_games_per_player": 400,
         "num_workers": 1,
         "scoring": {
             "baseline_upper_pct": 0.8,

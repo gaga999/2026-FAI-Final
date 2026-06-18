@@ -36,29 +36,29 @@ DEFAULT_TEACHERS = [
 ]
 
 FAST_TEACHER_ARGS = {
-    ("src.players.b13902102.best_player1", "BestPlayer1"): {
-        "deadline_s": 0.08,
-        "rollout_min": 8,
-        "rollout_max": 24,
-        "cand_keep": 6,
-    },
-    ("src.players.b13902102.best_player2", "BestPlayer2"): {
-        "deadline_s": 0.08,
-        "rollout_min": 8,
-        "rollout_max": 24,
-        "cand_keep": 6,
-    },
+    # ("src.players.b13902102.best_player1", "BestPlayer1"): {
+    #     "deadline_s": 0.2,
+    #     "rollout_min": 8,
+    #     "rollout_max": 24,
+    #     "cand_keep": 6,
+    # },
+    # ("src.players.b13902102.best_player2", "BestPlayer2"): {
+    #     "deadline_s": 0.2,
+    #     "rollout_min": 8,
+    #     "rollout_max": 24,
+    #     "cand_keep": 6,
+    # },
     ("src.players.b13902102.adaptive_portfolio_player", "AdaptivePortfolioPlayer"): {
-        "deadline_s": 0.08,
-        "samples_min": 8,
-        "samples_max": 24,
-        "cand_keep": 6,
+        "deadline_s": 0.2,
+        # "samples_min": 8,
+        # "samples_max": 24,
+        # "cand_keep": 6,
     },
     ("src.players.b13902102.rollout_search_player", "RolloutSearchPlayer"): {
-        "deadline_s": 0.05,
+        "deadline_s": 0.2,
     },
     ("src.players.b13902102.beam_expectimax_player", "BeamExpectimaxPlayer"): {
-        "deadline_s": 0.05,
+        "deadline_s": 0.2,
     },
 }
 
@@ -172,6 +172,8 @@ def train_bc(dataset_path, checkpoint_path, epochs=5, batch_size=256, lr=5.0e-4,
         avg_loss = loss_sum / max(1, batch_count)
         epoch_bar.set_postfix(avg_loss=f"{avg_loss:.4f}")
         tqdm.write(f"[BC] Epoch {epoch}/{int(epochs)} done: avg_loss={avg_loss:.4f}")
+        if epoch % 100 == 0:
+            save_policy_checkpoint(checkpoint_path, model, optimizer, stage="bc", dataset=str(dataset_path))
     print(f"[BC] Saving checkpoint: {checkpoint_path}", flush=True)
     save_policy_checkpoint(checkpoint_path, model, optimizer, stage="bc", dataset=str(dataset_path))
 
@@ -181,7 +183,7 @@ def main():
     parser.add_argument("--num-games", type=int, default=2000)
     parser.add_argument("--dataset", type=str, default="artifacts/b13902102/bc_dataset.pt")
     parser.add_argument("--checkpoint", type=str, default="artifacts/b13902102/bc_policy.pth")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--full-teachers", action="store_true", help="Use full default teacher budgets instead of fast BC collection budgets.")
     args = parser.parse_args()

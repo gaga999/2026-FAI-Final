@@ -85,6 +85,8 @@ def train_ppo_lite(init_checkpoint, output_checkpoint, episodes=1000, batch_size
         episode_bar.set_postfix(replay=len(replay), loss=f"{float(loss.detach().cpu()):.4f}")
         if episode % 50 == 0:
             tqdm.write(f"[PPO] Episode {episode}/{int(episodes)}: loss={float(loss.detach().cpu()):.4f}, replay={len(replay)}")
+        if episode % 100 == 0:
+            save_checkpoint(output_checkpoint, model, optimizer, stage="ppo_lite", init_checkpoint=str(init_checkpoint))
     print(f"[PPO] Saving checkpoint: {output_checkpoint}", flush=True)
     save_checkpoint(output_checkpoint, model, optimizer, stage="ppo_lite", init_checkpoint=str(init_checkpoint))
 
@@ -93,7 +95,7 @@ def main():
     parser = argparse.ArgumentParser(description="Optional actor-only PPO-lite fine-tuning.")
     parser.add_argument("--init-checkpoint", type=str, default="artifacts/b13902102/population/archive/best.pth")
     parser.add_argument("--output-checkpoint", type=str, default="artifacts/b13902102/ppo_policy.pth")
-    parser.add_argument("--episodes", type=int, default=1000)
+    parser.add_argument("--episodes", type=int, default=100000)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     train_ppo_lite(args.init_checkpoint, args.output_checkpoint, episodes=args.episodes, seed=args.seed)
