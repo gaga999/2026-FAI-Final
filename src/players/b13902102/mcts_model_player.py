@@ -23,6 +23,7 @@ class MCTSModelPlayer:
         c_puct: float = 1.4,
         root_temperature: float = 0.0,
         rollout_temperature: float = 0.7,
+        deadline_s: float = 0.72,
         seed: int = 0,
     ):
         self.player_idx = int(player_idx)
@@ -33,6 +34,7 @@ class MCTSModelPlayer:
             c_puct=c_puct,
             root_temperature=root_temperature,
             rollout_temperature=rollout_temperature,
+            deadline_s=min(0.90, max(0.05, float(deadline_s))),
         )
         self.rng = random.Random(int(seed) + 10007 * self.player_idx)
 

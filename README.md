@@ -139,11 +139,23 @@ python3 train_mcs_selfplay.py --init-checkpoint artifacts/b13902102/bc_policy.pt
 python3 train_ppo_selfplay.py --init-checkpoint artifacts/b13902102/population/archive/best.pth --output-checkpoint artifacts/b13902102/ppo_policy.pth
 ```
 
-`train_bc.py` defaults to fast teacher collection for slow local search teachers. Add `--full-teachers` when you want slower full-budget teacher data.
+`train_bc.py` defaults to fast teacher collection for slow local search teachers and checkpoints the dataset every 100 completed games. Use `--save-every-games N` to change the interval. To resume or extend a dataset, pass `--existing-dataset old.pt`; new decisions are appended and written to `--dataset`. The two paths may be the same.
+
+```bash
+python3 train_bc.py \
+  --num-games 1000 \
+  --existing-dataset artifacts/b13902102/bc_dataset.pt \
+  --dataset artifacts/b13902102/bc_dataset.pt \
+  --save-every-games 50
+```
+
+Add `--full-teachers` when you want slower full-budget teacher data.
 
 Model-based player entries:
 
 ```json
 ["src.players.b13902102.policy_model_player", "PolicyModelPlayer", {}, "policy"]
-["src.players.b13902102.mcts_model_player", "MCTSModelPlayer", {"sims": 48}, "mcts-policy"]
+["src.players.b13902102.mcts_model_player", "MCTSModelPlayer", {"sims": 48, "deadline_s": 0.72}, "mcts-policy"]
 ```
+
+For `MCTSModelPlayer`, `sims` is the maximum number of root simulations and `deadline_s` is a per-action soft wall-clock limit. The search stops at whichever limit is reached first. Keep `deadline_s` below the engine's hard timeout to leave time for feature extraction, model inference, and Python overhead.

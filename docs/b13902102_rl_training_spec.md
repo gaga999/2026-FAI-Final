@@ -171,7 +171,13 @@ train_bc.py
 Main functions:
 
 ```python
-collect_bc_dataset(num_games, output_path, seed=0)
+collect_bc_dataset(
+    num_games,
+    output_path,
+    seed=0,
+    existing_dataset_path=None,
+    save_every_games=100,
+)
 train_bc(dataset_path, checkpoint_path, epochs=5, ...)
 ```
 
@@ -193,6 +199,14 @@ low: pure heuristic and public baselines 1-5
 The black-box baseline `.so` players are treated like normal imported Python classes; the wrapper only observes their input/output.
 
 By default, `train_bc.py` uses a fast teacher mode for local search teachers (`best_player1`, `best_player2`, adaptive portfolio, rollout, beam) so a default BC run starts producing data quickly. Use `--full-teachers` to disable the reduced deadline/rollout budgets and collect slower but stronger teacher behavior.
+
+Collection durability:
+
+1. `--save-every-games N` writes a dataset checkpoint after every `N` completed games.
+2. Each checkpoint atomically replaces the output through a temporary file.
+3. `--existing-dataset PATH` loads an earlier dataset and appends newly collected records.
+4. `--existing-dataset` and `--dataset` may point to the same file for in-place continuation.
+5. An interruption loses at most the unfinished game plus records collected since the last checkpoint.
 
 Training loss:
 
@@ -388,6 +402,18 @@ Behavior cloning warmup:
 python3 train_bc.py \
   --num-games 2000 \
   --dataset artifacts/b13902102/bc_dataset.pt \
+  --save-every-games 100 \
+  --checkpoint artifacts/b13902102/bc_policy.pth
+```
+
+Continue an existing collection:
+
+```bash
+python3 train_bc.py \
+  --num-games 1000 \
+  --existing-dataset artifacts/b13902102/bc_dataset.pt \
+  --dataset artifacts/b13902102/bc_dataset.pt \
+  --save-every-games 50 \
   --checkpoint artifacts/b13902102/bc_policy.pth
 ```
 
@@ -421,5 +447,12 @@ Then configure players as:
 
 ```json
 ["src.players.b13902102.policy_model_player", "PolicyModelPlayer", {}, "policy"]
-["src.players.b13902102.mcts_model_player", "MCTSModelPlayer", {"sims": 48}, "mcts-policy"]
+["src.players.b13902102.mcts_model_player", "MCTSModelPlayer", {"sims": 48, "deadline_s": 0.72}, "mcts-policy"]
 ```
+
+`MCTSModelPlayer` time-related controls:
+
+- `sims`: hard upper bound on completed root simulations. One simulation may still be expensive because it rolls out the remaining game.
+- `deadline_s`: soft wall-clock budget for one `action()` call. It is checked between simulations and inside rollout rounds. The default is `0.72`, leaving a buffer below the engine's one-second hard timeout.
+- `heuristic_mix` and `random_mix` in `MCSConfig`: larger values indirectly reduce inference cost because more rollout actions avoid the policy MLP.
+- `rollout_temperature`, `root_temperature`, `prior_temperature`, and `c_puct` change search behavior but do not materially bound runtime.

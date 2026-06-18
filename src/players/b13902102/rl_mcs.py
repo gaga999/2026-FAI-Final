@@ -1,5 +1,6 @@
 import math
 import random
+import time
 
 import numpy as np
 import torch
@@ -20,6 +21,7 @@ class MCSConfig:
         root_temperature=1.0,
         heuristic_mix=0.25,
         random_mix=0.10,
+        deadline_s=0.5,
     ):
         self.sims = int(sims)
         self.c_puct = float(c_puct)
@@ -28,11 +30,13 @@ class MCSConfig:
         self.root_temperature = float(root_temperature)
         self.heuristic_mix = float(heuristic_mix)
         self.random_mix = float(random_mix)
+        self.deadline_s = None if deadline_s is None else max(0.0, float(deadline_s))
 
 
 def root_mcs_search(model, hand, history, player_idx, config=None, rng=None):
     config = MCSConfig() if config is None else config
     rng = random.Random() if rng is None else rng
+    deadline = None if config.deadline_s is None else time.perf_counter() + config.deadline_s
     cards = sorted(int(card) for card in hand)
     if not cards:
         pi = np.zeros(104, dtype=np.float32)
@@ -49,20 +53,35 @@ def root_mcs_search(model, hand, history, player_idx, config=None, rng=None):
     value_sum = {card: 0.0 for card in cards}
     priors = {card: max(float(prior[action_index(card)]), 1.0e-8) for card in cards}
 
+    completed_sims = 0
     for _ in range(config.sims):
+        if _deadline_reached(deadline):
+            break
         root_card = _select_puct_card(cards, visits, value_sum, priors, config.c_puct)
         state = hidden_state_from_history(cards, history, player_idx, rng)
-        value = _simulate_with_forced_root(model, state, player_idx, root_card, config, rng)
+        value = _simulate_with_forced_root(model, state, player_idx, root_card, config, rng, deadline)
         visits[root_card] += 1
         value_sum[root_card] += value
+        completed_sims += 1
 
     pi = np.zeros(104, dtype=np.float32)
-    total_visits = max(1, sum(visits.values()))
-    for card, count in visits.items():
-        pi[action_index(card)] = count / total_visits
+    total_visits = sum(visits.values())
+    if total_visits > 0:
+        for card, count in visits.items():
+            pi[action_index(card)] = count / total_visits
+    else:
+        prior_total = sum(priors.values())
+        for card in cards:
+            pi[action_index(card)] = priors[card] / prior_total
 
     action = _sample_from_visit_distribution(pi, cards, config.root_temperature, rng)
-    stats = {"visits": visits, "value_sum": value_sum, "priors": priors}
+    stats = {
+        "visits": visits,
+        "value_sum": value_sum,
+        "priors": priors,
+        "completed_sims": completed_sims,
+        "deadline_reached": _deadline_reached(deadline),
+    }
     return action, pi, stats
 
 
@@ -80,16 +99,24 @@ def _select_puct_card(cards, visits, value_sum, priors, c_puct):
     return best_card
 
 
-def _simulate_with_forced_root(model, state, player_idx, root_card, config, rng):
+def _deadline_reached(deadline):
+    return deadline is not None and time.perf_counter() >= deadline
+
+
+def _simulate_with_forced_root(model, state, player_idx, root_card, config, rng, deadline):
     if root_card not in state.hands[player_idx]:
         root_card = min(state.hands[player_idx])
     first = True
     while not state.is_terminal():
+        if _deadline_reached(deadline):
+            return state.utility(player_idx)
         history = state.history_for_player()
         actions = []
         for idx, hand in enumerate(state.hands):
             if not hand:
                 continue
+            if _deadline_reached(deadline):
+                return state.utility(player_idx)
             if idx == player_idx and first:
                 card = root_card
             else:

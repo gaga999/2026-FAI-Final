@@ -97,12 +97,64 @@ def sample_teacher_specs(rng, n_players=4):
     return selected
 
 
-def collect_bc_dataset(num_games, output_path, seed=0, fast_teachers=True):
+def _records_to_tensors(records):
+    return {
+        "features": torch.tensor([row.features for row in records], dtype=torch.float32),
+        "legal_masks": torch.tensor([row.legal_mask for row in records], dtype=torch.bool),
+        "actions": torch.tensor([row.action_idx for row in records], dtype=torch.long),
+    }
+
+
+def _save_dataset_checkpoint(output_path, existing_data, records, metadata):
+    new_data = _records_to_tensors(records)
+    if existing_data is None:
+        payload = {**new_data, "metadata": metadata}
+    elif records:
+        payload = {
+            "features": torch.cat((existing_data["features"], new_data["features"]), dim=0),
+            "legal_masks": torch.cat((existing_data["legal_masks"], new_data["legal_masks"]), dim=0),
+            "actions": torch.cat((existing_data["actions"], new_data["actions"]), dim=0),
+            "metadata": metadata,
+        }
+    else:
+        payload = {**existing_data, "metadata": metadata}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.name}.tmp")
+    torch.save(payload, temporary_path)
+    temporary_path.replace(output_path)
+    return payload
+
+
+def collect_bc_dataset(
+    num_games,
+    output_path,
+    seed=0,
+    fast_teachers=True,
+    existing_dataset_path=None,
+    save_every_games=100,
+):
     rng = random.Random(seed)
     records = []
     output_path = Path(output_path)
+    existing_data = None
+    existing_games = 0
+    existing_metadata = {}
+    if existing_dataset_path is not None:
+        existing_dataset_path = Path(existing_dataset_path)
+        print(f"[BC] Loading existing dataset: {existing_dataset_path}", flush=True)
+        existing_data = torch.load(existing_dataset_path, map_location="cpu")
+        existing_metadata = dict(existing_data.get("metadata", {}))
+        existing_games = int(existing_metadata.get("num_games", 0))
+        print(f"[BC] Existing records: {len(existing_data['actions'])}", flush=True)
+
+    save_every_games = max(1, int(save_every_games))
     teacher_mode = "fast" if fast_teachers else "full"
-    print(f"[BC] Collecting teacher decisions: games={int(num_games)}, seed={seed}, teacher_mode={teacher_mode}", flush=True)
+    print(
+        f"[BC] Collecting teacher decisions: games={int(num_games)}, seed={seed}, "
+        f"teacher_mode={teacher_mode}, save_every_games={save_every_games}",
+        flush=True,
+    )
     progress = tqdm(range(int(num_games)), desc="BC collect games", unit="game")
     for game_idx in progress:
         teacher_specs = sample_teacher_specs(rng)
@@ -123,15 +175,35 @@ def collect_bc_dataset(num_games, output_path, seed=0, fast_teachers=True):
         engine.play_game()
         progress.set_postfix(records=len(records), teachers=",".join(spec[1] for spec in teacher_specs))
 
-    payload = {
-        "features": torch.tensor([row.features for row in records], dtype=torch.float32),
-        "legal_masks": torch.tensor([row.legal_mask for row in records], dtype=torch.bool),
-        "actions": torch.tensor([row.action_idx for row in records], dtype=torch.long),
-        "metadata": {"num_games": int(num_games), "seed": seed, "teacher_pool": DEFAULT_TEACHERS, "teacher_mode": teacher_mode},
+        completed_games = game_idx + 1
+        if completed_games % save_every_games == 0:
+            metadata = {
+                **existing_metadata,
+                "num_games": existing_games + completed_games,
+                "seed": seed,
+                "teacher_pool": DEFAULT_TEACHERS,
+                "teacher_mode": teacher_mode,
+                "last_collection_games": completed_games,
+            }
+            existing_data = _save_dataset_checkpoint(output_path, existing_data, records, metadata)
+            records.clear()
+            tqdm.write(
+                f"[BC] Dataset checkpoint: games={completed_games}/{int(num_games)}, "
+                f"records={len(existing_data['actions'])} -> {output_path}"
+            )
+
+    completed_games = int(num_games)
+    metadata = {
+        **existing_metadata,
+        "num_games": existing_games + completed_games,
+        "seed": seed,
+        "teacher_pool": DEFAULT_TEACHERS,
+        "teacher_mode": teacher_mode,
+        "last_collection_games": completed_games,
     }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[BC] Saving dataset: records={len(records)} -> {output_path}", flush=True)
-    torch.save(payload, output_path)
+    if records or existing_data is None or completed_games % save_every_games != 0:
+        existing_data = _save_dataset_checkpoint(output_path, existing_data, records, metadata)
+    print(f"[BC] Dataset ready: records={len(existing_data['actions'])} -> {output_path}", flush=True)
     return output_path
 
 
@@ -182,13 +254,32 @@ def main():
     parser = argparse.ArgumentParser(description="Behavior cloning warmup for b13902102 policy model.")
     parser.add_argument("--num-games", type=int, default=2000)
     parser.add_argument("--dataset", type=str, default="artifacts/b13902102/bc_dataset.pt")
+    parser.add_argument(
+        "--existing-dataset",
+        type=str,
+        default=None,
+        help="Load this dataset first and append newly collected decisions to --dataset.",
+    )
+    parser.add_argument(
+        "--save-every-games",
+        type=int,
+        default=1000,
+        help="Checkpoint the collected dataset after this many completed games.",
+    )
     parser.add_argument("--checkpoint", type=str, default="artifacts/b13902102/bc_policy.pth")
     parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--full-teachers", action="store_true", help="Use full default teacher budgets instead of fast BC collection budgets.")
     args = parser.parse_args()
     print("[BC] Stage 1/2: dataset collection", flush=True)
-    collect_bc_dataset(args.num_games, args.dataset, seed=args.seed, fast_teachers=not args.full_teachers)
+    collect_bc_dataset(
+        args.num_games,
+        args.dataset,
+        seed=args.seed,
+        fast_teachers=not args.full_teachers,
+        existing_dataset_path=args.existing_dataset,
+        save_every_games=args.save_every_games,
+    )
     print("[BC] Stage 2/2: supervised training", flush=True)
     train_bc(args.dataset, args.checkpoint, epochs=args.epochs)
     print("[BC] Done", flush=True)
