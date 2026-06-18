@@ -1,0 +1,107 @@
+{
+    "baselines": [
+        [
+            "src.players.TA.public_baselines1",
+            "Baseline1",
+            {},
+            "B1"
+        ],
+        [
+            "src.players.TA.public_baselines1",
+            "Baseline3",
+            {},
+            "B3"
+        ],
+        [
+            "src.players.TA.public_baselines1",
+            "Baseline5",
+            {},
+            "B5"
+        ],
+        [
+            "src.players.TA.public_baselines2",
+            "Baseline6",
+            {},
+            "B6"
+        ],
+        [
+            "src.players.TA.public_baselines2",
+            "Baseline7",
+            {},
+            "B7"
+        ],
+        [
+            "src.players.TA.public_baselines2",
+            "Baseline8",
+            {},
+            "B8"
+        ],
+        [
+            "src.players.TA.public_baselines2",
+            "Baseline9",
+            {},
+            "B9"
+        ],
+        [
+            "src.players.TA.public_baselines2",
+            "Baseline10",
+            {},
+            "B10"
+        ]
+    ],
+    "players": [
+        [
+            "src.players.b13902102.ismcts_player",
+            "BeliefISMCTSPlayer",
+            {
+                "deadline_s": 0.9,
+                "max_iterations": 20000,
+                "c_puct": 2.25,
+                "root_warmup_passes": 3,
+                "particle_count": 128,
+                "proposal_count": 192,
+                "tree_horizon": 5
+            },
+            "belief-ismcts"
+        ],
+        [
+            "src.players.b13902102.best_player1",
+            "BestPlayer1",
+            {},
+            "bestplayer1"
+        ],
+        [
+            "src.players.b13902102.best_player2",
+            "BestPlayer2",
+            {},
+            "bestplayer2"
+        ],
+        [
+            "src.players.b13902102.adaptive_portfolio_player",
+            "AdaptivePortfolioPlayer",
+            {
+                "deadline_s": 0.8
+            },
+            "adaptive-portfolio"
+        ]
+    ],
+    "engine": {
+        "n_players": 4,
+        "n_rounds": 10,
+        "verbose": false,
+        "timeout": 1.0,
+        "timeout_buffer": 0.5
+    },
+    "tournament": {
+        "type": "random_partition",
+        "duplication_mode": "cycle",
+        "num_games_per_player": 400,
+        "num_workers": 1,
+        "scoring": {
+            "baseline_upper_pct": 0.8,
+            "baseline_lower_pct": 0.2,
+            "score_at_upper_pct": 80,
+            "score_at_lower_pct": 20
+        }
+    }
+}

@@ -100,6 +100,28 @@ The original `best_player1.py` and `best_player2.py` files are kept as legacy pl
 * `RolloutSearchPlayer` in `rollout_search_player.py`: bounded rollout search. It uses the heuristic selector as the fallback, samples hidden opponent hands from unseen cards, resolves turns with a local engine-compatible simulator, and stops before the 1-second timeout.
 * `BeamExpectimaxPlayer` in `beam_expectimax_player.py`: deterministic shallow beam/expectimax alternative. It samples plausible opponent actions from heuristic top-k choices and evaluates short-horizon leaf states without training a model.
 * `AdaptivePortfolioPlayer` in `adaptive_portfolio_player.py`: one-turn portfolio search designed after comparing the legacy best players. It keeps many cheap current-turn samples, uses an opponent policy mixture, and blends mean cost with worst-case and bad-event rates.
+* `BeliefISMCTSPlayer` in `ismcts_player.py`: belief-weighted information-set search for simultaneous turns. It samples history-weighted opponent hands, infers per-seat opponent profiles, uses exploratory PUCT with paired root rollouts, applies observation progressive widening, and rolls simulations to the end of the game.
+* `BestPlayer1Deadline` in `best_player1_deadline.py`: preserves the `BestPlayer1` strategy and uses the shared absolute-deadline convention. `deadline_s` is bounded to `0.10-0.90` seconds.
+* `BestPlayer2Deadline` in `best_player2_deadline.py`: preserves the `BestPlayer2` strategy with the same bounded absolute-deadline behavior.
+
+Example config entries:
+
+```json
+[
+    [
+        "src.players.b13902102.best_player1_deadline",
+        "BestPlayer1Deadline",
+        {"deadline_s": 0.80},
+        "bestplayer1-deadline"
+    ],
+    [
+        "src.players.b13902102.best_player2_deadline",
+        "BestPlayer2Deadline",
+        {"deadline_s": 0.80},
+        "bestplayer2-deadline"
+    ]
+]
+```
 
 Shared helper files:
 
@@ -126,6 +148,38 @@ python3 run_tournament.py --config configs/tournament/test.json
 ```
 
 `configs/game/test.json` runs the risk heuristic against released public baselines. `configs/tournament/test.json` includes the method agents plus released public baselines as scoring anchors.
+
+### Belief-weighted ISMCTS
+
+The model-free ISMCTS design and parameter descriptions are documented in
+[docs/b13902102_ismcts_spec.md](docs/b13902102_ismcts_spec.md).
+
+```bash
+python3 run_single_game.py --config configs/game/ismcts.json
+python3 run_tournament.py --config configs/tournament/ismcts.json
+```
+
+The default search uses a `0.9` second deadline, a `20,000` simulation safety
+ceiling, `c_puct=2.25`, three paired warm-up rollouts per root action, and up
+to 128 resampled belief particles. The time deadline normally stops search
+before the iteration ceiling.
+
+```json
+[
+    "src.players.b13902102.ismcts_player",
+    "BeliefISMCTSPlayer",
+    {
+        "deadline_s": 0.9,
+        "max_iterations": 20000,
+        "c_puct": 2.25,
+        "root_warmup_passes": 3,
+        "particle_count": 128,
+        "proposal_count": 192,
+        "tree_horizon": 5
+    },
+    "belief-ismcts"
+]
+```
 
 ## b13902102 RL Training Pipeline
 

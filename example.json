@@ -1,12 +1,15 @@
 {
     "server_host": "ws6.csie.org",
     "server_port": 8888,
-    "username": "3303rh",
+    "username": "0mct_nw",
     "password": "hehe",
-    "label": "3303rh",
+    "label": "0mct_nw",
     "player": {
-        "path": "src.players.b13902102.risk_heuristic_player",
-        "class": "RiskHeuristicPlayer",
-        "args": {}
+        "path": "src.players.b13902102.mcts_model_player",
+        "class": "MCTSModelPlayer",
+        "args": {
+            "checkpoint": "../../../artifacts/b13902102/population_memory_nowarm/archive/best.pth",
+            "deadline_s": 0.9
+        }
     }
 }

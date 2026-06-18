@@ -1,0 +1,36 @@
+{
+    "players": [
+        [
+            "src.players.b13902102.ismcts_player",
+            "ISMCTSPlayer",
+            {},
+            "belief-ismcts"
+        ],
+        [
+            "src.players.b13902102.best_player1",
+            "BestPlayer1",
+            {},
+            "bestplayer1"
+        ],
+        [
+            "src.players.b13902102.best_player2",
+            "BestPlayer2",
+            {},
+            "bestplayer2"
+        ],
+        [
+            "src.players.b13902102.rollout_search_player",
+            "RolloutSearchPlayer",
+            {},
+            "rollout"
+        ]
+    ],
+    "engine": {
+        "n_players": 4,
+        "n_rounds": 10,
+        "verbose": false,
+        "timeout": 1.0,
+        "timeout_buffer": 0.5
+    },
+    "num_games": 1
+}
