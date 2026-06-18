@@ -216,6 +216,7 @@ def train_bc(dataset_path, checkpoint_path, epochs=5, batch_size=256, lr=5.0e-4,
         f"[BC] Training policy: samples={len(dataset)}, epochs={int(epochs)}, batch_size={int(batch_size)}, lr={float(lr)}",
         flush=True,
     )
+    print("[BC] Initializing policy with random weights", flush=True)
     model = PolicyMLP()
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=1.0e-4)
     epoch_bar = tqdm(range(1, int(epochs) + 1), desc="BC epochs", unit="epoch")

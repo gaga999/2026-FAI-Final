@@ -7,17 +7,19 @@ from .rl_model import PolicyMLP
 
 def load_checkpoint(path, device="cpu"):
     ckpt_path = Path(path)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
     model = PolicyMLP().to(device)
     optimizer_state = None
     metadata = {}
-    if ckpt_path.exists():
-        payload = torch.load(ckpt_path, map_location=device)
-        if isinstance(payload, dict) and "model" in payload:
-            model.load_state_dict(payload["model"])
-            optimizer_state = payload.get("optimizer")
-            metadata = payload.get("metadata", {})
-        else:
-            model.load_state_dict(payload)
+    payload = torch.load(ckpt_path, map_location=device)
+    if isinstance(payload, dict) and "model" in payload:
+        model.load_state_dict(payload["model"])
+        optimizer_state = payload.get("optimizer")
+        metadata = payload.get("metadata", {})
+    else:
+        model.load_state_dict(payload)
     return model, optimizer_state, metadata
 
 

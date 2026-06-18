@@ -11,7 +11,7 @@ except ImportError:
 class RolloutSearchPlayer:
     """Bounded rollout search player with heuristic fallback."""
 
-    def __init__(self, player_idx: int, deadline_s: float = 0.74, seed: int = 0, **_):
+    def __init__(self, player_idx: int, deadline_s: float = 0.85, seed: int = 0, **_):
         self.player_idx = int(player_idx)
         self.deadline_s = min(0.90, max(0.10, float(deadline_s)))
         self.seed = int(seed)

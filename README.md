@@ -135,11 +135,39 @@ Root training entry points:
 
 ```bash
 python3 train_bc.py --num-games 2000 --checkpoint artifacts/b13902102/bc_policy.pth
-python3 train_mcs_selfplay.py --init-checkpoint artifacts/b13902102/bc_policy.pth --population-dir artifacts/b13902102/population
-python3 train_ppo_selfplay.py --init-checkpoint artifacts/b13902102/population/archive/best.pth --output-checkpoint artifacts/b13902102/ppo_policy.pth
+python3 train_mcs_selfplay.py --init-mode checkpoint --init-checkpoint artifacts/b13902102/bc_policy.pth --population-dir artifacts/b13902102/population
+python3 train_mcs_selfplay_memory.py --init-mode checkpoint --init-checkpoint artifacts/b13902102/bc_policy.pth --num-workers 1
+python3 train_ppo_selfplay.py --init-mode checkpoint --init-checkpoint artifacts/b13902102/population/archive/best.pth --output-checkpoint artifacts/b13902102/ppo_policy.pth
+python3 train_ppo_onpolicy.py --profile train --init-mode checkpoint --init-checkpoint artifacts/b13902102/bc_policy.pth --num-workers 1
 ```
 
-`train_bc.py` defaults to fast teacher collection for slow local search teachers and checkpoints the dataset every 100 completed games. Use `--save-every-games N` to change the interval. To resume or extend a dataset, pass `--existing-dataset old.pt`; new decisions are appended and written to `--dataset`. The two paths may be the same.
+`train_mcs_selfplay_memory.py` is the preferred MCS trainer for longer runs. It keeps all eight models and optimizers in the main process, uses a recent 6000-row replay buffer per agent, and writes checkpoints only after `--save-every-games`, replacement/archive events, and final shutdown. `--num-workers N` uses persistent spawned CPU workers and shared frozen model copies; model updates remain in the main process. `POOL_CHUNKSIZE=1` makes each game an independently scheduled pool task. Root exploration and train/eval rollout probabilities are editable constants near the top of the train file, while `--search-deadline` remains a CLI option.
+
+All MCS and PPO entry points use explicit initialization. `--init-mode checkpoint` requires `--init-checkpoint` to exist and fails otherwise. `--init-mode random` creates fresh random model parameters on every new run and ignores `--init-checkpoint`; it does not create a shared random init checkpoint. MCS still saves the active per-agent population files because those are training state and resume outputs.
+
+```bash
+python3 train_mcs_selfplay_memory.py \
+  --init-mode random \
+  --population-dir artifacts/b13902102/population_memory_random \
+  --num-workers 1
+```
+
+`train_ppo_selfplay.py` is retained as the original PPO-lite experiment. `train_ppo_onpolicy.py` collects a fresh rollout batch with a frozen policy, performs several PPO epochs on only that batch, then discards it. Each game assigns one random learner seat; the other seats use frozen current-policy copies, historical policies, or configured baseline agents, and only learner decisions enter the PPO batch. Use `--profile train` for broader self-play updates or `--profile finetune` for smaller updates from a strong BC/MCS checkpoint. `--num-workers N` uses persistent spawned workers with shared models, so rollout iterations do not write temporary model files.
+
+Both PPO entry points record `initialization=checkpoint` or `initialization=random` in their output checkpoint metadata.
+
+PPO keeps up to 10 in-memory historical snapshots. The profile or CLI controls snapshot interval, minimum/maximum iteration age, and recent-history preference. Fixed opponents are configured separately through `BASELINE_OPPONENTS` and `BASELINE_OPPONENT_ARGS` near the top of `train_ppo_onpolicy.py`, using the same `(module, class, weight)` style as BC teachers. Use `--disable-history` or `--disable-baselines` to disable either source.
+
+```bash
+python3 train_ppo_onpolicy.py \
+  --profile finetune \
+  --init-mode checkpoint \
+  --init-checkpoint artifacts/b13902102/population/archive/best.pth \
+  --output-checkpoint artifacts/b13902102/ppo_onpolicy_finetune.pth \
+  --num-workers 4
+```
+
+`train_bc.py` defaults to fast teacher collection for slow local search teachers and checkpoints the dataset every 1000 completed games. Use `--save-every-games N` to change the interval. To resume or extend a dataset, pass `--existing-dataset old.pt`; new decisions are appended and written to `--dataset`. The two paths may be the same.
 
 ```bash
 python3 train_bc.py \
@@ -150,6 +178,17 @@ python3 train_bc.py \
 ```
 
 Add `--full-teachers` when you want slower full-budget teacher data.
+
+Outcome-weighted BC is available as a separate pipeline with different default files:
+
+```bash
+python3 train_bc_weighted.py \
+  --num-games 2000 \
+  --dataset artifacts/b13902102/bc_weighted_dataset.pt \
+  --checkpoint artifacts/b13902102/bc_weighted_policy.pth
+```
+
+It stores per-decision outcome, teacher, rank, and final-score metadata. Rank and score favor successful trajectories, teacher quality applies a smaller correction, and each game's unclipped relative player weights are normalized to mean `1.0`. The weighted pipeline is self-contained: `WEIGHTED_TEACHERS` defines each teacher's module, class, collection sampling weight, and loss quality weight; its own `FAST_TEACHER_ARGS` and `--full-teachers` control collection budgets. Weighted collection/training defaults live in `WEIGHTED_BC_CONFIG`; `--batch-size`, `--learning-rate`, `--entropy-coef`, `--label-smoothing`, and weighting arguments can override them.
 
 Model-based player entries:
 

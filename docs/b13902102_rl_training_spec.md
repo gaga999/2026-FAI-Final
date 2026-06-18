@@ -223,6 +223,35 @@ artifacts/b13902102/bc_dataset.pt
 artifacts/b13902102/bc_policy.pth
 ```
 
+### Weighted BC Variant
+
+`train_bc_weighted.py` is an independent entry point and uses:
+
+```text
+artifacts/b13902102/bc_weighted_dataset.pt
+artifacts/b13902102/bc_weighted_policy.pth
+```
+
+It keeps all legal teacher decisions but assigns every player's full-game trajectory a weight. The default rank weights are `1.70, 1.15, 0.75, 0.40`; an exponential final-score factor and a teacher-quality factor are then applied. These factors are not clipped. The four player weights are normalized to mean `1.0` inside each game, so their relative weighting is preserved without allowing one game to contribute more total loss merely because its raw factors are large.
+
+The dataset additionally stores:
+
+```text
+weights, outcome_weights, teacher_weights, ranks, final_scores, teacher_ids
+```
+
+Training minimizes normalized weighted cross entropy plus the existing entropy regularizer. `--teacher-weight-strength 0` disables teacher loss weighting while retaining outcome weighting.
+
+The weighted script is independent from `train_bc.py`. Its `WEIGHTED_TEACHERS` entries use:
+
+```text
+(module_path, class_name, collection_sampling_weight, loss_quality_weight)
+```
+
+This keeps both teacher-specific weighting controls in one array without importing BC configuration. Its local `FAST_TEACHER_ARGS` reduces BestPlayer1/2 rollout budgets and deadlines and reduces the other local search-agent deadlines/budgets; `--full-teachers` disables those overrides.
+
+Weighted collection/training defaults are grouped in `WEIGHTED_BC_CONFIG`. CLI options expose the dataset checkpoint interval, epochs, batch size, learning rate, entropy coefficient, label smoothing, score coefficient, and teacher-weight strength without requiring code edits.
+
 ## Stage 2: Population MCS Self-Play
 
 Root script:
@@ -243,6 +272,7 @@ Important objects:
 class AgentSlot
 class PopulationTrainer
 PopulationTrainer.initialize_from_checkpoint(...)
+PopulationTrainer.initialize_random(...)
 PopulationTrainer.train_selfplay_games(...)
 PopulationTrainer.evaluate_frozen(...)
 PopulationTrainer.replace_bottom(...)
@@ -260,9 +290,15 @@ each has its own checkpoint, optimizer state, replay buffer, temperature, c_puct
 Initialization:
 
 ```text
-BC checkpoint is cloned into 8 agents
-different seed-like metadata, temperatures, c_puct, and entropy settings create diversity
+--init-mode checkpoint:
+    the required checkpoint is cloned into 8 agents
+--init-mode random:
+    each of the 8 agents receives a separately constructed fresh PolicyMLP
+    no shared random init checkpoint is created
+different temperatures, c_puct, and entropy settings create additional diversity
 ```
+
+A missing checkpoint is an error in checkpoint mode. Random initialization is never inferred from a missing path. It must be selected explicitly, and every new random-mode invocation reconstructs the models from new initial parameters. The active `agent_N.pth` files written under the population directory are normal training/resume state, not a reusable random init file.
 
 Training self-play:
 
@@ -327,6 +363,54 @@ Elo:
 
 `compute_bradley_terry_elo()` computes diagnostic Elo from pairwise rank outcomes during frozen evaluation. Elo is recorded for analysis, but replacement is based on EMA points/rank because that is closer to the official tournament objective.
 
+### Memory-First Parallel MCS Variant
+
+`train_mcs_selfplay_memory.py` and `rl_population_memory.py` retain the same eight-agent tournament scheme while changing collection and update execution:
+
+```text
+freeze the current population snapshot
+collect one generation of games, optionally in spawned CPU workers
+append targets to a 6000-row recent replay buffer per agent
+perform 96 in-memory optimizer steps per agent
+run frozen evaluation
+save only at game intervals, replacement/archive events, and final shutdown
+```
+
+Workers never update model parameters. Persistent spawned workers read shared frozen CPU model copies, while the main process owns all live models and optimizers. The main process synchronizes the shared copies only between complete collection/evaluation batches. `torch.set_num_threads(1)` is used inside workers to avoid CPU oversubscription.
+
+Pool scheduling and search probabilities are configured near the top of the root train scripts rather than through CLI flags:
+
+```text
+POOL_CHUNKSIZE = 1
+ROOT_EXPLORATION_MIX
+TRAIN_HEURISTIC_MIX / TRAIN_RANDOM_MIX
+EVAL_HEURISTIC_MIX / EVAL_RANDOM_MIX
+```
+
+With `POOL_CHUNKSIZE=1`, every training game is independently placed on the process-pool work queue, so a free worker immediately takes the next game. Model rollout probability is the remainder `1 - heuristic_mix - random_mix`. Both MCS entry points expose only the per-decision time limit as `--search-deadline`; setting it to `0` leaves the simulation count as the sole search limit.
+
+Default decision diversity comes from:
+
+```text
+agent-specific root visit temperatures: 1.25, 1.10, 0.95, 0.80
+3% uniform legal-action mixture during training action selection
+stochastic policy/random rollout mixture inside MCS
+agent-specific entropy regularization from about 0.0018 to 0.0045
+```
+
+The replay buffer is deliberately smaller than the original 20000 rows so targets stay closer to the current population. With batch size 256, the default 96 updates per agent processes approximately the same number of training samples per generation as the original 192 updates with batch size 128. The default MCS deadline remains 0.5 seconds. Replay is not written to disk; resuming restores models, optimizers, rankings, RNG state, and population metadata with an empty replay buffer. Active population checkpoints use temporary-file replacement, while archive checkpoints omit optimizer state to reduce file size.
+
+Example:
+
+```bash
+python3 train_mcs_selfplay_memory.py \
+  --init-mode checkpoint \
+  --init-checkpoint artifacts/b13902102/bc_policy.pth \
+  --population-dir artifacts/b13902102/population_memory \
+  --num-workers 4 \
+  --save-every-games 512
+```
+
 ## Stage 3: Optional PPO-Lite
 
 Root script:
@@ -345,6 +429,30 @@ clipped policy objective + entropy
 ```
 
 Use this only after MCS population training produces a stable checkpoint.
+
+### On-Policy PPO Variant
+
+`train_ppo_onpolicy.py` keeps the original PPO-lite script unchanged while using a strict rollout/update cycle:
+
+```text
+copy the learner into a shared frozen rollout model
+collect a fresh batch from one learner seat per game
+run several PPO epochs only on that batch
+discard the batch before the next rollout iteration
+```
+
+No rollout checkpoint is written to disk. Persistent spawned workers read one shared current model and a ring of 10 shared historical models. A snapshot is added at the configured iteration interval; historical sampling applies minimum/maximum age bounds and a configurable preference for recent snapshots.
+
+Fixed baseline opponents are separate from historical policies:
+
+```text
+BASELINE_OPPONENTS = [(module_path, class_name, sampling_weight), ...]
+BASELINE_OPPONENT_ARGS = {(module_path, class_name): constructor_kwargs, ...}
+```
+
+This matches the BC teacher configuration style. Current-policy, historical-policy, and baseline games have separate probabilities. Only actions sampled by the frozen learner policy are stored in the PPO batch.
+
+Both PPO entry points use the same explicit `--init-mode checkpoint|random` contract as MCS. Checkpoint mode requires the file to exist. Random mode creates a fresh `PolicyMLP` on every invocation and records `initialization=random`; no random init checkpoint is written. Missing MCS resume state remains an error because silently restarting would discard tournament state.
 
 ## Submitted / Evaluation Agents
 
@@ -419,10 +527,20 @@ python3 train_bc.py \
 
 The script prints phase boundaries and uses `tqdm` for game and epoch progress.
 
+Weighted BC:
+
+```bash
+python3 train_bc_weighted.py \
+  --num-games 2000 \
+  --dataset artifacts/b13902102/bc_weighted_dataset.pt \
+  --checkpoint artifacts/b13902102/bc_weighted_policy.pth
+```
+
 MCS population self-play:
 
 ```bash
 python3 train_mcs_selfplay.py \
+  --init-mode checkpoint \
   --init-checkpoint artifacts/b13902102/bc_policy.pth \
   --population-dir artifacts/b13902102/population \
   --generations 40
@@ -432,6 +550,7 @@ Optional PPO-lite:
 
 ```bash
 python3 train_ppo_selfplay.py \
+  --init-mode checkpoint \
   --init-checkpoint artifacts/b13902102/population/archive/best.pth \
   --output-checkpoint artifacts/b13902102/ppo_policy.pth
 ```

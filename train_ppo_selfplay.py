@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from src.players.b13902102.rl_checkpoint import load_checkpoint, save_checkpoint
 from src.players.b13902102.rl_features import action_index, extract_policy_features
-from src.players.b13902102.rl_model import mask_logits
+from src.players.b13902102.rl_model import PolicyMLP, mask_logits
 from src.players.b13902102.rl_train_env import deal_light_game
 
 
@@ -44,10 +44,36 @@ def run_episode(model, rng, temperature=1.0):
     return [(row[0], row[1], row[2], row[3], ret) for row, ret in zip(rows, returns)]
 
 
-def train_ppo_lite(init_checkpoint, output_checkpoint, episodes=1000, batch_size=512, lr=1.0e-5, clip_ratio=0.15, entropy_coef=0.005, seed=0):
+def train_ppo_lite(
+    init_mode,
+    init_checkpoint,
+    output_checkpoint,
+    episodes=1000,
+    batch_size=512,
+    lr=1.0e-5,
+    clip_ratio=0.15,
+    entropy_coef=0.005,
+    seed=0,
+):
     rng = random.Random(seed)
-    print(f"[PPO] Loading checkpoint: {init_checkpoint}", flush=True)
-    model, _, _ = load_checkpoint(init_checkpoint)
+    torch.manual_seed(seed)
+    init_checkpoint = Path(init_checkpoint)
+    initialization = str(init_mode)
+    if initialization == "checkpoint":
+        if not init_checkpoint.exists():
+            raise FileNotFoundError(
+                f"Initial checkpoint not found: {init_checkpoint}"
+            )
+        print(f"[PPO] Loading checkpoint: {init_checkpoint}", flush=True)
+        model, _, _ = load_checkpoint(init_checkpoint)
+    else:
+        print("[PPO] Creating a fresh random policy", flush=True)
+        model = PolicyMLP()
+    init_checkpoint_metadata = (
+        str(init_checkpoint)
+        if initialization == "checkpoint"
+        else None
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1.0e-4)
     replay = []
     print(f"[PPO] Training PPO-lite: episodes={int(episodes)}, batch_size={int(batch_size)}, lr={float(lr)}", flush=True)
@@ -86,19 +112,45 @@ def train_ppo_lite(init_checkpoint, output_checkpoint, episodes=1000, batch_size
         if episode % 50 == 0:
             tqdm.write(f"[PPO] Episode {episode}/{int(episodes)}: loss={float(loss.detach().cpu()):.4f}, replay={len(replay)}")
         if episode % 100 == 0:
-            save_checkpoint(output_checkpoint, model, optimizer, stage="ppo_lite", init_checkpoint=str(init_checkpoint))
+            save_checkpoint(
+                output_checkpoint,
+                model,
+                optimizer,
+                stage="ppo_lite",
+                initialization=initialization,
+                init_checkpoint=init_checkpoint_metadata,
+            )
     print(f"[PPO] Saving checkpoint: {output_checkpoint}", flush=True)
-    save_checkpoint(output_checkpoint, model, optimizer, stage="ppo_lite", init_checkpoint=str(init_checkpoint))
+    save_checkpoint(
+        output_checkpoint,
+        model,
+        optimizer,
+        stage="ppo_lite",
+        initialization=initialization,
+        init_checkpoint=init_checkpoint_metadata,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Optional actor-only PPO-lite fine-tuning.")
+    parser.add_argument(
+        "--init-mode",
+        choices=("checkpoint", "random"),
+        default="checkpoint",
+        help="Load a checkpoint or create a fresh random policy.",
+    )
     parser.add_argument("--init-checkpoint", type=str, default="artifacts/b13902102/population/archive/best.pth")
     parser.add_argument("--output-checkpoint", type=str, default="artifacts/b13902102/ppo_policy.pth")
     parser.add_argument("--episodes", type=int, default=100000)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    train_ppo_lite(args.init_checkpoint, args.output_checkpoint, episodes=args.episodes, seed=args.seed)
+    train_ppo_lite(
+        args.init_mode,
+        args.init_checkpoint,
+        args.output_checkpoint,
+        episodes=args.episodes,
+        seed=args.seed,
+    )
     print("[PPO] Done", flush=True)
 
 

@@ -71,11 +71,13 @@ def supervised_ce_loss(logits, legal_mask, action_indices, label_smoothing: floa
 
 def load_policy_model(checkpoint_path, map_location="cpu"):
     path = Path(checkpoint_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Policy checkpoint not found: {path}")
+
     model = PolicyMLP()
-    if path.exists():
-        ckpt = torch.load(path, map_location=map_location)
-        state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
-        model.load_state_dict(state)
+    ckpt = torch.load(path, map_location=map_location)
+    state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
+    model.load_state_dict(state)
     model.eval()
     return model
 

@@ -9,7 +9,7 @@ from tqdm import tqdm
 from .rl_checkpoint import clone_checkpoint, load_checkpoint, save_checkpoint
 from .rl_features import action_index, extract_policy_features
 from .rl_mcs import MCSConfig, root_mcs_search
-from .rl_model import policy_loss
+from .rl_model import PolicyMLP, policy_loss
 from .rl_train_env import deal_light_game
 
 
@@ -62,7 +62,12 @@ class PopulationTrainer:
 
     def initialize_from_checkpoint(self, checkpoint_path):
         checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"Initial checkpoint not found: {checkpoint_path}"
+            )
         self.slots = []
+        self.replay = {}
         for agent_id in range(self.population_size):
             dst = self.population_dir / f"agent_{agent_id}.pth"
             clone_checkpoint(
@@ -71,7 +76,8 @@ class PopulationTrainer:
                 {
                     "agent_id": agent_id,
                     "parent_id": None,
-                    "init": "bc_clone",
+                    "initialization": "checkpoint",
+                    "init_checkpoint": str(checkpoint_path),
                     "temperature": self._initial_temperature(agent_id),
                 },
             )
@@ -87,13 +93,57 @@ class PopulationTrainer:
             )
             self.replay[agent_id] = []
 
-    def train_selfplay_games(self, num_games, sims=32, updates_per_game=1, progress=False, desc=None):
+    def initialize_random(self):
+        self.slots = []
+        self.replay = {}
+        for agent_id in range(self.population_size):
+            dst = self.population_dir / f"agent_{agent_id}.pth"
+            temperature = self._initial_temperature(agent_id)
+            save_checkpoint(
+                dst,
+                PolicyMLP().to(self.device),
+                agent_id=agent_id,
+                parent_id=None,
+                initialization="random",
+                temperature=temperature,
+            )
+            self.slots.append(
+                AgentSlot(
+                    agent_id=agent_id,
+                    checkpoint=dst,
+                    parent_id=None,
+                    temperature=temperature,
+                    c_puct=1.2 + 0.1 * (agent_id % 5),
+                    entropy_coef=0.002 + 0.001 * (agent_id % 3),
+                    metadata={"initialization": "random"},
+                )
+            )
+            self.replay[agent_id] = []
+
+    def train_selfplay_games(
+        self,
+        num_games,
+        sims=32,
+        updates_per_game=1,
+        heuristic_mix=0.25,
+        random_mix=0.10,
+        search_deadline_s=0.5,
+        progress=False,
+        desc=None,
+    ):
         iterator = range(int(num_games))
         if progress:
             iterator = tqdm(iterator, desc=desc or "MCS self-play games", unit="game", leave=False)
         for game_idx in iterator:
             seats = self.sample_matchup()
-            transitions = self._play_training_game(seats, sims=sims, seed=self.rng.randrange(10**9))
+            transitions = self._play_training_game(
+                seats,
+                sims=sims,
+                seed=self.rng.randrange(10**9),
+                heuristic_mix=heuristic_mix,
+                random_mix=random_mix,
+                search_deadline_s=search_deadline_s,
+            )
             for agent_id, rows in transitions.items():
                 self.replay.setdefault(agent_id, []).extend(rows)
                 if len(self.replay[agent_id]) > self.replay_limit:
@@ -135,7 +185,16 @@ class PopulationTrainer:
             return selected
         return self.rng.sample(ids, 4)
 
-    def evaluate_frozen(self, partitions=16, sims=8, progress=False, desc=None):
+    def evaluate_frozen(
+        self,
+        partitions=16,
+        sims=8,
+        heuristic_mix=0.25,
+        random_mix=0.10,
+        search_deadline_s=0.5,
+        progress=False,
+        desc=None,
+    ):
         stats = {slot.agent_id: {"rank": 0.0, "points": 0.0, "score": 0.0, "games": 0} for slot in self.slots}
         pairwise = {slot.agent_id: {other.agent_id: 0.0 for other in self.slots} for slot in self.slots}
         ids = [slot.agent_id for slot in self.slots]
@@ -153,7 +212,14 @@ class PopulationTrainer:
                 for shift in range(4):
                     state = base_state.clone()
                     state.hands = [base_hands[(seat + shift) % 4][:] for seat in range(4)]
-                    self._play_eval_game(state, table, sims=sims)
+                    self._play_eval_game(
+                        state,
+                        table,
+                        sims=sims,
+                        heuristic_mix=heuristic_mix,
+                        random_mix=random_mix,
+                        search_deadline_s=search_deadline_s,
+                    )
                     ranks = state.ranks()
                     for seat, agent_id in enumerate(table):
                         stats[agent_id]["rank"] += ranks[seat]
@@ -230,7 +296,15 @@ class PopulationTrainer:
             saved.append(dst)
         return saved
 
-    def _play_training_game(self, agent_ids, sims, seed):
+    def _play_training_game(
+        self,
+        agent_ids,
+        sims,
+        seed,
+        heuristic_mix,
+        random_mix,
+        search_deadline_s,
+    ):
         state = deal_light_game(seed=seed)
         transitions = {agent_id: [] for agent_id in agent_ids}
         model_cache = {}
@@ -246,7 +320,14 @@ class PopulationTrainer:
                     continue
                 slot = self._slot(agent_id)
                 model = model_cache[agent_id]
-                cfg = MCSConfig(sims=sims, c_puct=slot.c_puct, root_temperature=slot.temperature)
+                cfg = MCSConfig(
+                    sims=sims,
+                    c_puct=slot.c_puct,
+                    root_temperature=slot.temperature,
+                    heuristic_mix=heuristic_mix,
+                    random_mix=random_mix,
+                    deadline_s=search_deadline_s,
+                )
                 action, target_pi, _ = root_mcs_search(model, state.hands[seat], history, seat, cfg, self.rng)
                 features, legal_mask = extract_policy_features(state.hands[seat], history, seat)
                 transitions[agent_id].append((features, legal_mask, target_pi))
@@ -254,7 +335,15 @@ class PopulationTrainer:
             state.step(actions)
         return transitions
 
-    def _play_eval_game(self, state, agent_ids, sims):
+    def _play_eval_game(
+        self,
+        state,
+        agent_ids,
+        sims,
+        heuristic_mix,
+        random_mix,
+        search_deadline_s,
+    ):
         model_cache = {}
         for agent_id in agent_ids:
             model, _, _ = load_checkpoint(self._slot(agent_id).checkpoint, device=self.device)
@@ -268,7 +357,15 @@ class PopulationTrainer:
                     continue
                 slot = self._slot(agent_id)
                 model = model_cache[agent_id]
-                cfg = MCSConfig(sims=sims, c_puct=slot.c_puct, root_temperature=0.0, rollout_temperature=0.7)
+                cfg = MCSConfig(
+                    sims=sims,
+                    c_puct=slot.c_puct,
+                    root_temperature=0.0,
+                    rollout_temperature=0.7,
+                    heuristic_mix=heuristic_mix,
+                    random_mix=random_mix,
+                    deadline_s=search_deadline_s,
+                )
                 action, _, _ = root_mcs_search(model, state.hands[seat], history, seat, cfg, self.rng)
                 actions.append((seat, action))
             state.step(actions)

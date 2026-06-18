@@ -11,7 +11,7 @@ except ImportError:
 class BeamExpectimaxPlayer:
     """Shallow beam/expectimax search player."""
 
-    def __init__(self, player_idx: int, deadline_s: float = 0.72, seed: int = 17, **_):
+    def __init__(self, player_idx: int, deadline_s: float = 0.8, seed: int = 17, **_):
         self.player_idx = int(player_idx)
         self.deadline_s = min(0.90, max(0.10, float(deadline_s)))
         self.seed = int(seed)
